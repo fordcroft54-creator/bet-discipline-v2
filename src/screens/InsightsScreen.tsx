@@ -226,7 +226,6 @@ export default function InsightsScreen() {
   useFocusEffect(
     useCallback(() => {
       load();
-      // no cleanup needed
     }, [load])
   );
 
@@ -417,6 +416,61 @@ export default function InsightsScreen() {
       .slice(0, 8);
   }, [settledWithResult, normalizedProfit]);
 
+  // ✅ NEW: Results by confidence level (settled bets only)
+  const confidenceRows = useMemo(() => {
+    const map: Record<
+      string,
+      { total: number; wins: number; losses: number; pushes: number; net: number; stakeSum: number }
+    > = {};
+
+    const keyFor = (c?: number | null) => {
+      const n = Number(c);
+      if (!Number.isFinite(n) || n <= 0) return "Unknown";
+      const clamped = Math.max(1, Math.min(5, Math.round(n)));
+      return String(clamped); // "1".."5"
+    };
+
+    for (const b of settledWithResult) {
+      const k = keyFor(b.confidence);
+      map[k] =
+        map[k] ?? { total: 0, wins: 0, losses: 0, pushes: 0, net: 0, stakeSum: 0 };
+
+      map[k].total += 1;
+      map[k].wins += b.result === "win" ? 1 : 0;
+      map[k].losses += b.result === "loss" ? 1 : 0;
+      map[k].pushes += b.result === "push" ? 1 : 0;
+
+      map[k].stakeSum += Number(b.stake ?? 0);
+      map[k].net += normalizedProfit(b);
+    }
+
+    const labelFor = (k: string) => {
+      if (k === "Unknown") return "Unknown / not saved";
+      const n = Number(k);
+      // 1 = Low, 5 = High
+      const tag = n <= 2 ? "Low" : n === 3 ? "Mid" : "High"; // 4–5 = High
+      return `${k} / 5 (${tag})`;
+    };
+
+    // Order 5→1, Unknown last
+    const sortKey = (k: string) => (k === "Unknown" ? -999 : Number(k));
+
+    return Object.entries(map)
+      .map(([k, v]) => ({
+        key: k,
+        label: labelFor(k),
+        total: v.total,
+        winRate: v.total ? v.wins / v.total : 0,
+        avgStake: v.total ? v.stakeSum / v.total : 0,
+        net: v.net,
+        roi: v.stakeSum > 0 ? v.net / v.stakeSum : 0,
+        wins: v.wins,
+        losses: v.losses,
+        pushes: v.pushes,
+      }))
+      .sort((a, b) => sortKey(b.key) - sortKey(a.key));
+  }, [settledWithResult, normalizedProfit]);
+
   const topEmotionLabel = useMemo(() => {
     const k = overall.topEmotion;
     if (!k) return null;
@@ -507,6 +561,69 @@ export default function InsightsScreen() {
             <Text style={{ color: Theme.sub, fontWeight: "700" }}>
               Settle a few bets and this section will come alive.
             </Text>
+          )}
+        </Section>
+
+        {/* ✅ NEW SECTION */}
+        <Section title="Results by confidence">
+          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+            How you perform at each confidence level (settled bets)
+          </Text>
+
+          {!hasSettled ? (
+            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+              No settled bets yet.
+            </Text>
+          ) : confidenceRows.length === 0 ? (
+            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+              No settled bets with confidence saved yet.
+            </Text>
+          ) : (
+            <View style={{ gap: 12 }}>
+              {confidenceRows.map((r) => (
+                <View
+                  key={r.key}
+                  style={{
+                    paddingTop: 10,
+                    borderTopWidth: 1,
+                    borderTopColor: Theme.border,
+                    gap: 8,
+                  }}
+                >
+                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                    <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                      {r.label}
+                    </Text>
+                    <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                      n={r.total}
+                    </Text>
+                  </View>
+
+                  <Bar
+                    value={r.winRate}
+                    labelLeft={`Win ${pct(r.winRate)} (${r.wins}W${
+                      r.losses ? `–${r.losses}L` : ""
+                    }${r.pushes ? `–${r.pushes}P` : ""})`}
+                    labelRight={`Avg ${fmtMoney(r.avgStake)}`}
+                  />
+
+                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+                      Net:{" "}
+                      <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                        {fmtMoney(r.net)}
+                      </Text>
+                    </Text>
+                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+                      ROI:{" "}
+                      <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                        {pct(r.roi)}
+                      </Text>
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
           )}
         </Section>
 

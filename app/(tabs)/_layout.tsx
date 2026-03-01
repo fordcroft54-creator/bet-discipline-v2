@@ -82,7 +82,6 @@ export default function TabsLayout() {
     >
       {/* Hidden routes */}
       <Tabs.Screen name="index" options={{ href: null }} />
-      <Tabs.Screen name="explore" options={{ href: null }} />
 
       {/* Visible tabs */}
       <Tabs.Screen name="home" options={{ title: "Home" }} />

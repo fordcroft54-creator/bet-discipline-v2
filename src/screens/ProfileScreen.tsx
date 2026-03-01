@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Keyboard,
@@ -15,6 +15,21 @@ import { Button } from "../ui/Button";
 import { Field } from "../ui/Field";
 import { Theme } from "../ui/Theme";
 
+function digitsAndDot(s: string) {
+  const cleaned = (s ?? "").replace(/[^\d.]/g, "");
+  const parts = cleaned.split(".");
+  if (parts.length <= 1) return cleaned;
+  return `${parts[0]}.${parts.slice(1).join("")}`;
+}
+
+function formatCurrencyForDisplay(raw: string) {
+  const n = Number(digitsAndDot(raw));
+  if (!Number.isFinite(n)) return "$";
+  return `$${digitsAndDot(String(n))}`;
+}
+
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
 export default function ProfileScreen() {
   const bump = useAppStore((s) => s.bump);
 
@@ -27,55 +42,88 @@ export default function ProfileScreen() {
   const [lockDaysOnCap, setLockDaysOnCap] = useState("7");
 
   const [busy, setBusy] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [saveErrorMsg, setSaveErrorMsg] = useState<string | null>(null);
+
+  const userIdRef = useRef<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+
+  const maxBetDisplay = useMemo(() => formatCurrencyForDisplay(maxBet), [maxBet]);
+  const weeklyBudgetDisplay = useMemo(
+    () => formatCurrencyForDisplay(weeklyBudget),
+    [weeklyBudget]
+  );
+  const monthlyLossCapDisplay = useMemo(
+    () => formatCurrencyForDisplay(monthlyLossCap),
+    [monthlyLossCap]
+  );
 
   useEffect(() => {
-    let mounted = true;
+    mountedRef.current = true;
 
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!mounted) return;
+      try {
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        if (!mountedRef.current) return;
 
-      setEmail(data.user?.email ?? "");
-      if (!data.user) return;
+        const user = data.user;
+        setEmail(user?.email ?? "");
+        userIdRef.current = user?.id ?? null;
+        if (!user) return;
 
-      const g = await supabase
-        .from("goals")
-        .select("*")
-        .eq("user_id", data.user.id)
-        .maybeSingle();
+        const g = await supabase
+          .from("goals")
+          .select("*")
+          .eq("user_id", user.id)
+          .maybeSingle();
 
-      if (!mounted) return;
+        if (!mountedRef.current) return;
 
-      if (g.data) {
-        setMaxBet(String(g.data.max_bet ?? 0));
-        setWeeklyBudget(String(g.data.weekly_budget ?? 0));
-        setMonthlyLossCap(String(g.data.monthly_loss_cap ?? 0));
-        setDaysPerWeek(String(g.data.days_per_week ?? 0));
-        setLockDaysOnCap(String(g.data.lock_days_on_cap ?? 0));
+        if (g.error) throw g.error;
+
+        if (g.data) {
+          setMaxBet(String(g.data.max_bet ?? 0));
+          setWeeklyBudget(String(g.data.weekly_budget ?? 0));
+          setMonthlyLossCap(String(g.data.monthly_loss_cap ?? 0));
+          setDaysPerWeek(String(g.data.days_per_week ?? 0));
+          setLockDaysOnCap(String(g.data.lock_days_on_cap ?? 0));
+        }
+      } catch (e: any) {
+        setSaveStatus("error");
+        setSaveErrorMsg(e?.message ?? "Could not load goals");
       }
     })();
 
     return () => {
-      mounted = false;
+      mountedRef.current = false;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, []);
 
-  const saveGoals = async () => {
-    Keyboard.dismiss();
-    setBusy(true);
-    try {
-      const { data: userData } = await supabase.auth.getUser();
-      const user = userData.user;
-      if (!user) throw new Error("Not logged in.");
+  const buildPayload = (userId: string) => ({
+    user_id: userId,
+    max_bet: Number(digitsAndDot(maxBet)) || 0,
+    weekly_budget: Number(digitsAndDot(weeklyBudget)) || 0,
+    monthly_loss_cap: Number(digitsAndDot(monthlyLossCap)) || 0,
+    days_per_week: Number(digitsAndDot(daysPerWeek)) || 0,
+    lock_days_on_cap: Number(digitsAndDot(lockDaysOnCap)) || 0,
+  });
 
-      const payload = {
-        user_id: user.id,
-        max_bet: Number(maxBet) || 0,
-        weekly_budget: Number(weeklyBudget) || 0,
-        monthly_loss_cap: Number(monthlyLossCap) || 0,
-        days_per_week: Number(daysPerWeek) || 0,
-        lock_days_on_cap: Number(lockDaysOnCap) || 0,
-      };
+  const doSave = async () => {
+    const userId = userIdRef.current;
+    if (!userId) {
+      setSaveStatus("error");
+      setSaveErrorMsg("Not logged in.");
+      return;
+    }
+
+    setSaveStatus("saving");
+    setSaveErrorMsg(null);
+
+    try {
+      const payload = buildPayload(userId);
 
       const { error } = await supabase
         .from("goals")
@@ -84,13 +132,49 @@ export default function ProfileScreen() {
       if (error) throw error;
 
       bump();
-      Alert.alert("Saved", "Goals updated.");
+
+      if (!mountedRef.current) return;
+      setSaveStatus("saved");
+
+      setTimeout(() => {
+        if (!mountedRef.current) return;
+        setSaveStatus("idle");
+      }, 1200);
     } catch (e: any) {
-      Alert.alert("Error", e?.message ?? "Could not save goals");
-    } finally {
-      setBusy(false);
+      if (!mountedRef.current) return;
+      setSaveStatus("error");
+      setSaveErrorMsg(e?.message ?? "Could not save goals");
     }
   };
+
+  const scheduleAutosave = () => {
+    if (!userIdRef.current) return;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    setSaveStatus("saving");
+    setSaveErrorMsg(null);
+
+    debounceRef.current = setTimeout(() => {
+      doSave();
+    }, 750);
+  };
+
+  useEffect(() => {
+    if (!userIdRef.current) return;
+    scheduleAutosave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [maxBet, weeklyBudget, monthlyLossCap, daysPerWeek, lockDaysOnCap]);
+
+  const statusText = useMemo(() => {
+    if (saveStatus === "saving") return "Saving…";
+    if (saveStatus === "saved") return "Saved";
+    if (saveStatus === "error")
+      return saveErrorMsg ? `Couldn’t save: ${saveErrorMsg}` : "Couldn’t save";
+    return "";
+  }, [saveStatus, saveErrorMsg]);
+
+  const retryDisabled = saveStatus === "saving";
 
   const signOut = async () => {
     try {
@@ -121,12 +205,30 @@ export default function ProfileScreen() {
             gap: 14,
           }}
         >
-          {/* Title */}
-          <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>
-            Goals
-          </Text>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+            }}
+          >
+            <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>
+              Goals
+            </Text>
 
-          {/* Goals section card */}
+            {!!statusText && (
+              <Text
+                style={{
+                  color: saveStatus === "error" ? Theme.sub : Theme.sub,
+                  fontWeight: "800",
+                  fontSize: 12,
+                }}
+              >
+                {statusText}
+              </Text>
+            )}
+          </View>
+
           <View
             style={{
               backgroundColor: Theme.card,
@@ -143,57 +245,54 @@ export default function ProfileScreen() {
 
             <Field
               label="Max Bet Size"
-              value={maxBet}
-              onChangeText={setMaxBet}
+              value={maxBetDisplay}
+              onChangeText={(t) => setMaxBet(digitsAndDot(t))}
               keyboardType="decimal-pad"
               returnKeyType="done"
-              onSubmitEditing={saveGoals}
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
 
             <Field
               label="Weekly Wager Budget"
-              value={weeklyBudget}
-              onChangeText={setWeeklyBudget}
+              value={weeklyBudgetDisplay}
+              onChangeText={(t) => setWeeklyBudget(digitsAndDot(t))}
               keyboardType="decimal-pad"
               returnKeyType="done"
-              onSubmitEditing={saveGoals}
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
 
             <Field
               label="Monthly Loss Cap"
-              value={monthlyLossCap}
-              onChangeText={setMonthlyLossCap}
+              value={monthlyLossCapDisplay}
+              onChangeText={(t) => setMonthlyLossCap(digitsAndDot(t))}
               keyboardType="decimal-pad"
               returnKeyType="done"
-              onSubmitEditing={saveGoals}
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
 
             <Field
               label="Betting Days / Week"
               value={daysPerWeek}
-              onChangeText={setDaysPerWeek}
+              onChangeText={(t) => setDaysPerWeek(digitsAndDot(t))}
               keyboardType="number-pad"
               returnKeyType="done"
-              onSubmitEditing={saveGoals}
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
 
             <Field
               label="Lock # Of Days If Cap Hit"
               value={lockDaysOnCap}
-              onChangeText={setLockDaysOnCap}
+              onChangeText={(t) => setLockDaysOnCap(digitsAndDot(t))}
               keyboardType="number-pad"
               returnKeyType="done"
-              onSubmitEditing={saveGoals}
+              onSubmitEditing={() => Keyboard.dismiss()}
             />
 
-            <Button
-              title={busy ? "Saving…" : "Save Goals"}
-              onPress={saveGoals}
-              disabled={busy}
-            />
+            {saveStatus === "error" && (
+              <Button title="Retry" onPress={doSave} disabled={retryDisabled} />
+            )}
           </View>
 
-          {/* Profile section moved LOWER, under goals */}
           <View style={{ height: 6 }} />
 
           <View
@@ -210,9 +309,7 @@ export default function ProfileScreen() {
               Profile
             </Text>
 
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-              Signed in as
-            </Text>
+            <Text style={{ color: Theme.sub, fontWeight: "700" }}>Signed in as</Text>
             <Text style={{ color: Theme.text, fontWeight: "900" }}>{email}</Text>
 
             <View style={{ height: 6 }} />

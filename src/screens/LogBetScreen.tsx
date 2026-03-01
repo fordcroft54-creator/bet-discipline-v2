@@ -1,5 +1,5 @@
-import { router } from "expo-router";
-import React, { useMemo, useRef, useState } from "react";
+import { useFocusEffect, router } from "expo-router";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Keyboard,
@@ -8,6 +8,7 @@ import {
   SafeAreaView,
   ScrollView,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { supabase } from "../lib/supabase";
@@ -18,18 +19,15 @@ import { Field } from "../ui/Field";
 import { Theme } from "../ui/Theme";
 
 /**
- * NEW FRICTION (weekly budget overage):
- * ✅ If logging this bet would exceed weekly wager budget:
- *    - show a modal: "You're about to exceed your weekly budget"
- *    - user must either Lower Stake (focus stake field), Cancel, or Continue
- *    - if Continue, require a "What's driving this bet?" selection (single)
- *    - THEN save bet
- *
- * Notes:
- * - This assumes your goals table has `weekly_wager_budget` (number).
- * - "Used this week" is computed from bets in the current week (open+settled) using `stake`.
- * - Uses local timezone week boundaries (Mon–Sun).
- * - Keeps your existing max_bet override alert.
+ * Updates:
+ * ✅ Auto-scroll to top when this tab/screen is focused
+ * ✅ Stake shows "$" prefix before input
+ * ✅ Emotion NOT preselected (no default "bored")
+ * ✅ Confidence NOT preselected (must choose)
+ * ✅ Removed redundant Low/High row under confidence
+ * ✅ Keeps Sport + Bet Type selectors + "Other" fields
+ * ✅ Keeps max bet override + weekly budget friction modal
+ * ✅ Fixes TS ref callback "must return void" issue
  */
 
 const SPORTS = [
@@ -81,6 +79,7 @@ const EMOTIONS = [
 type Sport = (typeof SPORTS)[number];
 type BetType = (typeof BET_TYPES)[number];
 type Emotion = (typeof EMOTIONS)[number]["value"];
+type Confidence = 1 | 2 | 3 | 4 | 5;
 
 const EMOTION_LABEL_BY_VALUE: Record<Emotion, string> = EMOTIONS.reduce(
   (acc, e) => {
@@ -234,6 +233,17 @@ function endOfWeekLocalExclusive(d: Date) {
 export default function LogBetScreen() {
   const bump = useAppStore((s) => s.bump);
 
+  // ✅ auto-scroll to top on focus
+  const scrollRef = useRef<ScrollView>(null);
+  useFocusEffect(
+    useCallback(() => {
+      const t = setTimeout(() => {
+        scrollRef.current?.scrollTo({ y: 0, animated: false });
+      }, 0);
+      return () => clearTimeout(t);
+    }, [])
+  );
+
   const [sport, setSport] = useState<Sport>("NFL");
   const [betType, setBetType] = useState<BetType>("Straight / Moneyline");
 
@@ -243,22 +253,20 @@ export default function LogBetScreen() {
   const [stake, setStake] = useState("");
   const [eventLabel, setEventLabel] = useState("");
 
-  // multi-select emotions (kept as-is for your model)
-  const [emotions, setEmotions] = useState<Emotion[]>(["bored"]);
+  // ✅ no default emotion
+  const [emotions, setEmotions] = useState<Emotion[]>([]);
   const EMOTION_MAX = 3;
 
-  // NEW: friction "driver" (single required when over budget)
   const [budgetDriver, setBudgetDriver] = useState<Emotion | null>(null);
 
-  // confidence where 1 = low, 5 = high
-  const [confidence, setConfidence] = useState<1 | 2 | 3 | 4 | 5>(3);
+  // ✅ no default confidence (must choose)
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
 
   const [busy, setBusy] = useState(false);
 
   const [sportOpen, setSportOpen] = useState(false);
   const [betTypeOpen, setBetTypeOpen] = useState(false);
 
-  // NEW: budget friction modal state
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
   const [budgetModalData, setBudgetModalData] = useState<{
     budget: number;
@@ -268,8 +276,8 @@ export default function LogBetScreen() {
 
   const stakeNum = useMemo(() => Number(stake), [stake]);
 
-  const stakeRef = useRef<any>(null);
-  const eventRef = useRef<any>(null);
+  const stakeRef = useRef<TextInput | null>(null);
+  const eventRef = useRef<any>(null); // Field ref type depends on your forwardRef
 
   const normalizedSport = useMemo(() => {
     if (sport !== "Other") return sport;
@@ -291,9 +299,6 @@ export default function LogBetScreen() {
     setEmotions((prev) => {
       const has = prev.includes(v);
 
-      // don't allow empty selection
-      if (has && prev.length === 1) return prev;
-
       if (has) return prev.filter((x) => x !== v);
 
       if (prev.length >= EMOTION_MAX) {
@@ -306,12 +311,12 @@ export default function LogBetScreen() {
   };
 
   const confidenceLabel = useMemo(() => {
+    if (confidence == null) return "—";
     if (confidence <= 2) return "Low";
     if (confidence === 3) return "Medium";
     return "High";
   }, [confidence]);
 
-  // --------- actual insert ----------
   const actuallySaveBet = async () => {
     setBusy(true);
     try {
@@ -328,19 +333,16 @@ export default function LogBetScreen() {
         stake: stakeNum,
         event_label: eventLabel.trim() ? eventLabel.trim() : null,
 
-        // Backward-compatible single field:
-        emotion: emotions[0],
+        // back-compat single
+        emotion: emotions[0] ?? null,
 
-        // Requires `emotions` column (text[] or jsonb)
+        // multi-select
         emotions,
 
         status: "open",
 
-        // Requires `confidence` column (smallint)
-        confidence,
-
-        // OPTIONAL: if you add a column later, this becomes very valuable analytics.
-        // budget_driver: budgetDriver,
+        // ✅ confidence can be null if your column allows it
+        confidence: confidence,
       };
 
       const { error } = await supabase.from("bets").insert(payload);
@@ -348,16 +350,17 @@ export default function LogBetScreen() {
 
       bump();
 
-      // reset
       setStake("");
       setEventLabel("");
       setSport("NFL");
       setBetType("Straight / Moneyline");
       setSportOther("");
       setBetTypeOther("");
-      setEmotions(["bored"]);
+      setEmotions([]);
       setBudgetDriver(null);
-      setConfidence(3);
+
+      // ✅ reset to no selection
+      setConfidence(null);
 
       router.replace("/(tabs)/bets" as any);
     } catch (e: any) {
@@ -367,9 +370,7 @@ export default function LogBetScreen() {
     }
   };
 
-  // NEW: fetch goals + weekly used stake
   const getWeeklyBudgetAndUsed = async (userId: string) => {
-    // 1) weekly budget from goals
     const g = await supabase
       .from("goals")
       .select("weekly_budget, max_bet")
@@ -381,7 +382,6 @@ export default function LogBetScreen() {
     const weeklyBudget = Number((g.data as any)?.weekly_budget ?? 0);
     const maxBet = Number((g.data as any)?.max_bet ?? 0);
 
-    // 2) used this week (sum stake)
     const now = new Date();
     const start = startOfWeekLocal(now);
     const end = endOfWeekLocalExclusive(now);
@@ -403,9 +403,8 @@ export default function LogBetScreen() {
     return { weeklyBudget, used, maxBet };
   };
 
-  // NEW: show friction modal
   const openBudgetFriction = (budget: number, used: number, thisBet: number) => {
-    setBudgetDriver(null); // require fresh selection each time
+    setBudgetDriver(null);
     setBudgetModalData({ budget, used, thisBet });
     setBudgetModalOpen(true);
   };
@@ -413,7 +412,6 @@ export default function LogBetScreen() {
   const continueFromBudgetModal = async () => {
     if (!budgetModalData) return;
 
-    // require driver selection
     if (!budgetDriver) {
       Alert.alert("Quick check-in", "What’s driving this bet right now?");
       return;
@@ -427,7 +425,6 @@ export default function LogBetScreen() {
 
   const save = async () => {
     Keyboard.dismiss();
-
     if (busy) return;
 
     if (!stake || !Number.isFinite(stakeNum) || stakeNum <= 0) {
@@ -446,6 +443,11 @@ export default function LogBetScreen() {
       return Alert.alert("Emotion", "Pick at least 1 emotion.");
     }
 
+    // ✅ require confidence to be chosen
+    if (confidence == null) {
+      return Alert.alert("Confidence", "Pick a confidence level (1–5).");
+    }
+
     try {
       const { data: userData, error: userErr } = await supabase.auth.getUser();
       if (userErr) throw userErr;
@@ -455,7 +457,7 @@ export default function LogBetScreen() {
 
       const { weeklyBudget, used, maxBet } = await getWeeklyBudgetAndUsed(user.id);
 
-      // 1) EXISTING: max bet size override (keep this first, because it’s a clean simple check)
+      // Max bet override
       if (maxBet > 0 && stakeNum > maxBet) {
         Alert.alert(
           "Over your max bet size",
@@ -466,7 +468,6 @@ export default function LogBetScreen() {
               text: "Log anyway",
               style: "destructive",
               onPress: () => {
-                // after max-bet override, still check weekly budget friction
                 const wouldBeUsed = used + stakeNum;
                 if (weeklyBudget > 0 && wouldBeUsed > weeklyBudget) {
                   openBudgetFriction(weeklyBudget, used, stakeNum);
@@ -480,14 +481,13 @@ export default function LogBetScreen() {
         return;
       }
 
-      // 2) NEW: weekly budget friction
+      // Weekly budget friction
       const wouldBeUsed = used + stakeNum;
       if (weeklyBudget > 0 && wouldBeUsed > weeklyBudget) {
         openBudgetFriction(weeklyBudget, used, stakeNum);
         return;
       }
 
-      // Otherwise save normally
       await actuallySaveBet();
     } catch (e: any) {
       Alert.alert("Error", e?.message ?? "Could not validate goals");
@@ -520,7 +520,7 @@ export default function LogBetScreen() {
         onClose={() => setBetTypeOpen(false)}
       />
 
-      {/* NEW: Budget friction modal */}
+      {/* Budget friction modal */}
       <Modal
         visible={budgetModalOpen}
         transparent
@@ -611,7 +611,6 @@ export default function LogBetScreen() {
                   title="Lower stake"
                   onPress={() => {
                     setBudgetModalOpen(false);
-                    // focus stake input immediately so it feels like “edit”
                     setTimeout(() => stakeRef.current?.focus?.(), 50);
                   }}
                   disabled={busy}
@@ -629,11 +628,7 @@ export default function LogBetScreen() {
 
             <View style={{ height: 10 }} />
 
-            <Button
-              title="Log anyway"
-              onPress={continueFromBudgetModal}
-              disabled={busy}
-            />
+            <Button title="Log anyway" onPress={continueFromBudgetModal} disabled={busy} />
 
             <View style={{ height: 6 }} />
             <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
@@ -645,6 +640,7 @@ export default function LogBetScreen() {
       </Modal>
 
       <ScrollView
+        ref={scrollRef}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ padding: 16, gap: 14 }}
       >
@@ -698,19 +694,47 @@ export default function LogBetScreen() {
           />
         )}
 
-        {/* STAKE */}
-        <Field
-          ref={stakeRef}
-          label="Stake Amount"
-          value={stake}
-          onChangeText={setStake}
-          keyboardType="numeric"
-          placeholder="e.g., 50"
-          returnKeyType="next"
-          onSubmitEditing={() => eventRef.current?.focus?.()}
-        />
+        {/* STAKE with $ prefix */}
+        <View style={{ gap: 6 }}>
+          <Text style={{ color: Theme.sub, fontWeight: "800" }}>Stake Amount</Text>
 
-        {/* EVENT (ENTER SHOULD ONLY DISMISS KEYBOARD) */}
+          <View
+            style={{
+              backgroundColor: Theme.card,
+              borderWidth: 1,
+              borderColor: Theme.border,
+              borderRadius: 14,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>$</Text>
+
+            <TextInput
+              ref={(r) => {
+                stakeRef.current = r;
+              }}
+              value={stake}
+              onChangeText={(t) => setStake(t.replace(/[^0-9.]/g, ""))}
+              keyboardType="numeric"
+              returnKeyType="next"
+              onSubmitEditing={() => eventRef.current?.focus?.()}
+              style={{
+                flex: 1,
+                color: Theme.text,
+                fontSize: 16,
+                fontWeight: "800",
+                padding: 0,
+                margin: 0,
+              }}
+            />
+          </View>
+        </View>
+
+        {/* EVENT (enter should only dismiss keyboard) */}
         <Field
           ref={eventRef}
           label="Game / Event (optional)"
@@ -722,7 +746,7 @@ export default function LogBetScreen() {
           onSubmitEditing={() => Keyboard.dismiss()}
         />
 
-        {/* EMOTIONS (multi-select) */}
+        {/* EMOTIONS */}
         <View style={{ gap: 6 }}>
           <Text style={{ color: Theme.sub, fontWeight: "800" }}>
             How are you feeling? (pick up to {EMOTION_MAX})
@@ -754,7 +778,7 @@ export default function LogBetScreen() {
           <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
             Current:{" "}
             <Text style={{ color: Theme.text, fontWeight: "900" }}>
-              {confidence} ({confidenceLabel})
+              {confidence == null ? "— (pick one)" : `${confidence} (${confidenceLabel})`}
             </Text>
           </Text>
         </View>
@@ -768,22 +792,6 @@ export default function LogBetScreen() {
               onPress={() => setConfidence(n)}
             />
           ))}
-        </View>
-
-        <View
-          style={{
-            flexDirection: "row",
-            justifyContent: "space-between",
-            marginTop: -6,
-            paddingHorizontal: 4,
-          }}
-        >
-          <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "800" }}>
-            Low
-          </Text>
-          <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "800" }}>
-            High
-          </Text>
         </View>
 
         <Button title={busy ? "Saving…" : "Log Bet"} onPress={save} disabled={busy} />
