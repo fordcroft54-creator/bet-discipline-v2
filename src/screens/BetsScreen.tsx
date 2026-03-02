@@ -22,14 +22,17 @@ import { Chip } from "../ui/Chip";
 
 /**
  * BetsScreen (FULL UPDATED)
- * ✅ Visual differentiation: badge stays; bottom line becomes ONE focal amount (-$ / +$ / $0 / Pending)
- * ✅ Edit modal touch + scroll fixed (no responder stealing)
- * ✅ Pickers touch + scroll fixed
+ * ✅ Uses placed_at (actual bet date) for sorting + display (falls back to created_at)
+ * ✅ Edit modal touch fixed so Sport/Bet Type are clickable (Android-safe)
+ * ✅ Pickers still touch + scroll safe
+ * ✅ Confidence labels match Log Bet:
+ *    1=Very low, 2=Low, 3=Medium, 4=High, 5=Very high
  */
 
 type Bet = {
   id: string;
   created_at?: string | null;
+  placed_at?: string | null;
 
   sport?: string | null;
   bet_type?: string | null;
@@ -126,11 +129,15 @@ function formatDate(iso?: string | null) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** ✅ Matches Log Bet labels exactly */
 function confidenceLabel(n?: number | null) {
   if (!n || !Number.isFinite(n)) return "";
-  if (n <= 2) return "Low";
-  if (n === 3) return "Med";
-  return "High";
+  const x = Math.round(n);
+  if (x <= 1) return "Very low";
+  if (x === 2) return "Low";
+  if (x === 3) return "Medium";
+  if (x === 4) return "High";
+  return "Very high";
 }
 
 function toNumStake(s: string) {
@@ -236,9 +243,10 @@ export default function BetsScreen() {
     const { data, error } = await supabase
       .from("bets")
       .select(
-        "id,created_at,sport,bet_type,stake,event_label,status,result,profit,emotion,emotions,confidence"
+        "id,created_at,placed_at,sport,bet_type,stake,event_label,status,result,profit,emotion,emotions,confidence"
       )
       .eq("user_id", user.id)
+      .order("placed_at", { ascending: false, nullsFirst: false })
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -278,13 +286,6 @@ export default function BetsScreen() {
     [loadBets]
   );
 
-  const goSettle = useCallback(
-    (betId: string) => {
-      router.push(`/settle-bet?betId=${encodeURIComponent(betId)}`);
-    },
-    [router]
-  );
-
   const badgeFor = useCallback(
     (isSettled: boolean, resultRaw?: string | null) => {
       if (!isSettled) return { label: "OPEN", fg: colors.open, bg: colors.openBg };
@@ -294,7 +295,16 @@ export default function BetsScreen() {
       if (r === "push") return { label: "PUSH", fg: colors.push, bg: colors.pushBg };
       return { label: "SETTLED", fg: Theme.sub, bg: colors.pushBg };
     },
-    [colors.open, colors.openBg, colors.win, colors.winBg, colors.loss, colors.lossBg, colors.push, colors.pushBg]
+    [
+      colors.open,
+      colors.openBg,
+      colors.win,
+      colors.winBg,
+      colors.loss,
+      colors.lossBg,
+      colors.push,
+      colors.pushBg,
+    ]
   );
 
   const outcomeAmount = useCallback(
@@ -410,7 +420,17 @@ export default function BetsScreen() {
     } finally {
       setEditSaving(false);
     }
-  }, [editBetId, sport, betType, stakeText, eventLabel, selectedEmotions, confidence, closeEdit, loadBets]);
+  }, [
+    editBetId,
+    sport,
+    betType,
+    stakeText,
+    eventLabel,
+    selectedEmotions,
+    confidence,
+    closeEdit,
+    loadBets,
+  ]);
 
   const renderItem = ({ item }: { item: Bet }) => {
     const isSettled = (item.status ?? "").toLowerCase() === "settled";
@@ -422,7 +442,11 @@ export default function BetsScreen() {
     const event = tidy(item.event_label);
     const stake = Number(item.stake ?? 0);
 
-    const rawEmotions: string[] = item.emotions?.length ? item.emotions : item.emotion ? [item.emotion] : [];
+    const rawEmotions: string[] = item.emotions?.length
+      ? item.emotions
+      : item.emotion
+        ? [item.emotion]
+        : [];
     const emotionText = rawEmotions.length
       ? rawEmotions
           .map((e) => EMOTION_LABEL_BY_VALUE[e] ?? e)
@@ -431,9 +455,12 @@ export default function BetsScreen() {
       : "—";
 
     const conf = item.confidence ?? null;
-    const confText = conf && Number.isFinite(conf) ? `${conf}/5 (${confidenceLabel(conf)})` : "—";
+    const confText =
+      conf && Number.isFinite(conf) ? `${conf}/5 (${confidenceLabel(conf)})` : "—";
 
-    const placed = formatDate(item.created_at);
+    const dateIso = item.placed_at ?? item.created_at ?? null;
+    const placed = formatDate(dateIso);
+
     const badge = badgeFor(isSettled, item.result);
     const amt = outcomeAmount(item);
 
@@ -569,219 +596,203 @@ export default function BetsScreen() {
         }
       />
 
-    {/* ===================== EDIT MODAL (touch + scroll fixed) ===================== */}
-<Modal
-  visible={editOpen}
-  transparent
-  animationType="fade"
-  onRequestClose={closeEdit}
-  presentationStyle="overFullScreen"
->
-  <View
-    style={{
-      flex: 1,
-      backgroundColor: "rgba(0,0,0,0.55)",
-      justifyContent: "center",
-      padding: 16,
-    }}
-  >
-    {/* Backdrop (tap outside closes) */}
-    <Pressable
-      onPress={closeEdit}
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 0,
-      }}
-    />
-
-    {/* Card */}
-    <View
-      style={{
-        zIndex: 10,
-        elevation: 10,
-        width: "100%",
-        height: "88%",
-        backgroundColor: Theme.card,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: Theme.border,
-        padding: 14,
-      }}
-    >
-      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>Edit Bet</Text>
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
-        style={{ flex: 1 }}
+      {/* ===================== EDIT MODAL (touch + scroll fixed, Android-safe) ===================== */}
+      <Modal
+        visible={editOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={closeEdit}
+        presentationStyle="overFullScreen"
       >
-        <ScrollView
-          ref={(r) => {
-            editScrollRef.current = r;
-          }}
-          style={{ flex: 1, marginTop: 12 }}
-          contentContainerStyle={{ gap: 12, paddingBottom: 18 }}
-          keyboardShouldPersistTaps="always"
-          nestedScrollEnabled
-          showsVerticalScrollIndicator
-        >
-          {/* Sport + Bet Type */}
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            <Pressable
-              // ✅ use onPressIn so ScrollView can't cancel it
-              onPressIn={() => setSportOpen(true)}
-              hitSlop={12}
-              style={{
-                flex: 1,
-                backgroundColor: Theme.bg,
-                borderRadius: 14,
-                borderWidth: 1,
-                borderColor: Theme.border,
-                padding: 12,
-                gap: 6,
-              }}
-            >
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Sport</Text>
-              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
-                {sport ? sport : "Select"}
-              </Text>
-            </Pressable>
-
-            <Pressable
-              // ✅ use onPressIn so ScrollView can't cancel it
-              onPressIn={() => setBetTypeOpen(true)}
-              hitSlop={12}
-              style={{
-                flex: 1,
-                backgroundColor: Theme.bg,
-                borderRadius: 14,
-                borderWidth: 1,
-                borderColor: Theme.border,
-                padding: 12,
-                gap: 6,
-              }}
-            >
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Bet type</Text>
-              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
-                {betType ? betType : "Select"}
-              </Text>
-            </Pressable>
-          </View>
-
-          {/* Stake */}
-          <View style={{ gap: 6 }}>
-            <Text style={inputStyles.label}>Stake</Text>
-            <View style={inputStyles.container}>
-              <Text style={inputStyles.dollar}>$</Text>
-              <TextInput
-                value={stakeText}
-                onChangeText={setStakeText}
-                keyboardType="numeric"
-                returnKeyType="done"
-                onSubmitEditing={() => Keyboard.dismiss()}
-                placeholder=""
-                placeholderTextColor={Theme.sub}
-                style={inputStyles.input}
-              />
-            </View>
-          </View>
-
-          {/* Event */}
-          <View style={{ gap: 6 }}>
-            <Text style={inputStyles.label}>Game / Event</Text>
-            <View style={inputStyles.container}>
-              <TextInput
-                value={eventLabel}
-                onChangeText={setEventLabel}
-                returnKeyType="done"
-                onSubmitEditing={() => Keyboard.dismiss()}
-                placeholder="e.g. Hawks vs Heat"
-                placeholderTextColor={Theme.sub}
-                style={inputStyles.input}
-              />
-            </View>
-          </View>
-
-          {/* Confidence */}
-          <View style={{ gap: 8 }}>
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Confidence</Text>
-            <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
-              {[1, 2, 3, 4, 5].map((n) => {
-                const label = n <= 2 ? "Low" : n === 3 ? "Mid" : "High";
-                const selected = confidence === n;
-                return (
-                  <Pressable
-                    key={n}
-                    onPress={() => setConfidence((prev) => (prev === n ? null : n))}
-                    hitSlop={10}
-                    style={{
-                      paddingVertical: 10,
-                      paddingHorizontal: 12,
-                      borderRadius: 999,
-                      borderWidth: 1,
-                      borderColor: selected ? "#ffffff" : Theme.border,
-                      backgroundColor: selected ? "#ffffff" : "transparent",
-                      minWidth: 86,
-                      alignItems: "center",
-                    }}
-                  >
-                    <Text style={{ color: selected ? "#0f1115" : Theme.text, fontWeight: "900" }}>
-                      {n}/5 {label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-
-          {/* Emotions */}
-          <View style={{ gap: 8 }}>
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Emotions (up to 3)</Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              {EMOTIONS.map((e) => (
-                <Chip
-                  key={e.value}
-                  label={e.label}
-                  selected={selectedEmotions.includes(e.value)}
-                  onPress={() => toggleEmotion(e.value)}
-                />
-              ))}
-            </View>
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-              Selected{" "}
-              <Text style={{ color: Theme.text, fontWeight: "900" }}>{selectedEmotions.length}</Text>/3
-            </Text>
-          </View>
-
-          <Button
-            title={editSaving ? "Saving…" : "Save Changes"}
-            onPress={saveEdit}
-            disabled={!canSaveEdit || editSaving}
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)" }}>
+          <Pressable
+            onPress={closeEdit}
+            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 1 }}
           />
 
-          <Pressable onPress={closeEdit} style={{ alignItems: "center", paddingVertical: 10 }}>
-            <Text style={{ color: Theme.sub, fontWeight: "900" }}>Cancel</Text>
-          </Pressable>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </View>
-  </View>
-</Modal>
+          <View style={{ flex: 1, justifyContent: "center", padding: 16, zIndex: 2 }} pointerEvents="box-none">
+            <View
+              style={{
+                width: "100%",
+                height: "88%",
+                backgroundColor: Theme.card,
+                borderRadius: 16,
+                borderWidth: 1,
+                borderColor: Theme.border,
+                padding: 14,
+                elevation: 20,
+                zIndex: 10,
+              }}
+            >
+              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>Edit Bet</Text>
+
+              <KeyboardAvoidingView
+                behavior={Platform.OS === "ios" ? "padding" : undefined}
+                keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 0}
+                style={{ flex: 1 }}
+              >
+                <ScrollView
+                  ref={(r) => {
+                    editScrollRef.current = r;
+                  }}
+                  style={{ flex: 1, marginTop: 12 }}
+                  contentContainerStyle={{ gap: 12, paddingBottom: 18 }}
+                  keyboardShouldPersistTaps="handled"
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator
+                >
+                  {/* Sport + Bet Type */}
+                  <View style={{ flexDirection: "row", gap: 10 }}>
+                    <Pressable
+                      onPress={() => setSportOpen(true)}
+                      hitSlop={12}
+                      style={{
+                        flex: 1,
+                        backgroundColor: Theme.bg,
+                        borderRadius: 14,
+                        borderWidth: 1,
+                        borderColor: Theme.border,
+                        padding: 12,
+                        gap: 6,
+                      }}
+                    >
+                      <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Sport</Text>
+                      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+                        {sport ? sport : "Select"}
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      onPress={() => setBetTypeOpen(true)}
+                      hitSlop={12}
+                      style={{
+                        flex: 1,
+                        backgroundColor: Theme.bg,
+                        borderRadius: 14,
+                        borderWidth: 1,
+                        borderColor: Theme.border,
+                        padding: 12,
+                        gap: 6,
+                      }}
+                    >
+                      <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Bet type</Text>
+                      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+                        {betType ? betType : "Select"}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  {/* Stake */}
+                  <View style={{ gap: 6 }}>
+                    <Text style={inputStyles.label}>Stake</Text>
+                    <View style={inputStyles.container}>
+                      <Text style={inputStyles.dollar}>$</Text>
+                      <TextInput
+                        value={stakeText}
+                        onChangeText={setStakeText}
+                        keyboardType="numeric"
+                        returnKeyType="done"
+                        onSubmitEditing={() => Keyboard.dismiss()}
+                        placeholder=""
+                        placeholderTextColor={Theme.sub}
+                        style={inputStyles.input}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Event */}
+                  <View style={{ gap: 6 }}>
+                    <Text style={inputStyles.label}>Game / Event</Text>
+                    <View style={inputStyles.container}>
+                      <TextInput
+                        value={eventLabel}
+                        onChangeText={setEventLabel}
+                        returnKeyType="done"
+                        onSubmitEditing={() => Keyboard.dismiss()}
+                        placeholder="e.g. Hawks vs Heat"
+                        placeholderTextColor={Theme.sub}
+                        style={inputStyles.input}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Confidence */}
+                  <View style={{ gap: 8 }}>
+                    <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Confidence</Text>
+                    <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
+                      {[1, 2, 3, 4, 5].map((n) => {
+                        const selected = confidence === n;
+                        const label =
+                          n === 1 ? "Very low" : n === 2 ? "Low" : n === 3 ? "Medium" : n === 4 ? "High" : "Very high";
+
+                        return (
+                          <Pressable
+                            key={n}
+                            onPress={() => setConfidence((prev) => (prev === n ? null : n))}
+                            hitSlop={10}
+                            style={{
+                              paddingVertical: 10,
+                              paddingHorizontal: 12,
+                              borderRadius: 999,
+                              borderWidth: 1,
+                              borderColor: selected ? "#ffffff" : Theme.border,
+                              backgroundColor: selected ? "#ffffff" : "transparent",
+                              minWidth: 110,
+                              alignItems: "center",
+                            }}
+                          >
+                            <Text style={{ color: selected ? "#0f1115" : Theme.text, fontWeight: "900" }}>
+                              {n}/5 {label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  {/* Emotions */}
+                  <View style={{ gap: 8 }}>
+                    <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Emotions (up to 3)</Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+                      {EMOTIONS.map((e) => (
+                        <Chip
+                          key={e.value}
+                          label={e.label}
+                          selected={selectedEmotions.includes(e.value)}
+                          onPress={() => toggleEmotion(e.value)}
+                        />
+                      ))}
+                    </View>
+                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+                      Selected{" "}
+                      <Text style={{ color: Theme.text, fontWeight: "900" }}>{selectedEmotions.length}</Text>/3
+                    </Text>
+                  </View>
+
+                  <Button
+                    title={editSaving ? "Saving…" : "Save Changes"}
+                    onPress={saveEdit}
+                    disabled={!canSaveEdit || editSaving}
+                  />
+
+                  <Pressable onPress={closeEdit} style={{ alignItems: "center", paddingVertical: 10 }}>
+                    <Text style={{ color: Theme.sub, fontWeight: "900" }}>Cancel</Text>
+                  </Pressable>
+                </ScrollView>
+              </KeyboardAvoidingView>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* ===================== SPORT PICKER ===================== */}
       <Modal visible={sportOpen} transparent animationType="fade" onRequestClose={() => setSportOpen(false)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", padding: 16 }}>
-          <Pressable
-            onPress={() => setSportOpen(false)}
-            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
-          />
+          <Pressable onPress={() => setSportOpen(false)} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
           <View
             style={{
               zIndex: 2,
+              elevation: 20,
               width: "100%",
               height: "75%",
               backgroundColor: Theme.card,
@@ -814,12 +825,7 @@ export default function BetsScreen() {
                     backgroundColor: tidy(sport) === String(s) ? "#ffffff" : "transparent",
                   }}
                 >
-                  <Text
-                    style={{
-                      color: tidy(sport) === String(s) ? "#0f1115" : Theme.text,
-                      fontWeight: "900",
-                    }}
-                  >
+                  <Text style={{ color: tidy(sport) === String(s) ? "#0f1115" : Theme.text, fontWeight: "900" }}>
                     {s}
                   </Text>
                 </Pressable>
@@ -832,13 +838,11 @@ export default function BetsScreen() {
       {/* ===================== BET TYPE PICKER ===================== */}
       <Modal visible={betTypeOpen} transparent animationType="fade" onRequestClose={() => setBetTypeOpen(false)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", padding: 16 }}>
-          <Pressable
-            onPress={() => setBetTypeOpen(false)}
-            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
-          />
+          <Pressable onPress={() => setBetTypeOpen(false)} style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }} />
           <View
             style={{
               zIndex: 2,
+              elevation: 20,
               width: "100%",
               height: "75%",
               backgroundColor: Theme.card,
@@ -852,7 +856,7 @@ export default function BetsScreen() {
             <ScrollView
               style={{ flex: 1, marginTop: 10 }}
               contentContainerStyle={{ gap: 10, paddingBottom: 10 }}
-              keyboardShouldPersistTaps="always"
+              keyboardShouldPersistTaps="handled"
               nestedScrollEnabled
             >
               {BET_TYPES.map((t) => (
@@ -871,12 +875,7 @@ export default function BetsScreen() {
                     backgroundColor: tidy(betType) === String(t) ? "#ffffff" : "transparent",
                   }}
                 >
-                  <Text
-                    style={{
-                      color: tidy(betType) === String(t) ? "#0f1115" : Theme.text,
-                      fontWeight: "900",
-                    }}
-                  >
+                  <Text style={{ color: tidy(betType) === String(t) ? "#0f1115" : Theme.text, fontWeight: "900" }}>
                     {t}
                   </Text>
                 </Pressable>

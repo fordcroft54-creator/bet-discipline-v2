@@ -4,6 +4,7 @@ import {
   Alert,
   Keyboard,
   Modal,
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -11,6 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { supabase } from "../lib/supabase";
 import { useAppStore } from "../store/useAppStore";
 import { Button } from "../ui/Button";
@@ -20,14 +22,16 @@ import { Theme } from "../ui/Theme";
 
 /**
  * Updates:
- * ✅ Auto-scroll to top when this tab/screen is focused
- * ✅ Stake shows "$" prefix before input
- * ✅ Emotion NOT preselected (no default "bored")
- * ✅ Confidence NOT preselected (must choose)
- * ✅ Removed redundant Low/High row under confidence
- * ✅ Keeps Sport + Bet Type selectors + "Other" fields
- * ✅ Keeps max bet override + weekly budget friction modal
- * ✅ Fixes TS ref callback "must return void" issue
+ * ✅ Keeps default bet date = Today
+ * ✅ Adds quick chips: Today / Yesterday / 2 days ago / 3 days ago / Other
+ * ✅ "Other" opens native calendar picker
+ *    - iOS: inline picker inside a bottom-sheet modal (aligned w/ your other selectors)
+ *    - Android: native picker modal
+ * ✅ Stores placed_at as NOW time if Today, otherwise stores at 12:00 local time (TZ safe)
+ * ✅ Weekly budget is ONLY enforced for bets in the CURRENT week (not backdated bets)
+ * ✅ Confidence labels: 1 = Very low, 5 = Very high
+ * ✅ NEW: Confidence buttons are custom oval pills (not Chip), with 1 & 5 wider,
+ *         and everything stays on ONE line on an average iPhone.
  */
 
 const SPORTS = [
@@ -57,7 +61,6 @@ const BET_TYPES = [
 ] as const;
 
 const EMOTIONS = [
-  // 🔴 High risk
   { label: "😐 Bored", value: "bored" },
   { label: "😤 Chasing losses", value: "chasing_losses" },
   { label: "😡 Tilted / frustrated", value: "tilted" },
@@ -65,13 +68,11 @@ const EMOTIONS = [
   { label: "🍺 Drinking", value: "drinking" },
   { label: "⚡ Impulsive", value: "impulsive" },
 
-  // 🟡 Neutral / mixed
   { label: "🔁 Habit / routine", value: "habit" },
   { label: "👯 Social / with friends", value: "social" },
   { label: "🎉 Confident", value: "confident" },
   { label: "🙂 Just for fun", value: "fun" },
 
-  // 🟢 Controlled
   { label: "🧠 Pre-planned", value: "pre_planned" },
   { label: "💸 Within budget", value: "within_budget" },
 ] as const;
@@ -214,11 +215,10 @@ function money(n: number) {
 }
 
 function startOfWeekLocal(d: Date) {
-  // Monday 00:00 local time
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
   const day = x.getDay(); // 0=Sun..6=Sat
-  const diff = (day === 0 ? -6 : 1) - day; // move to Monday
+  const diff = (day === 0 ? -6 : 1) - day; // Monday
   x.setDate(x.getDate() + diff);
   return x;
 }
@@ -227,13 +227,82 @@ function endOfWeekLocalExclusive(d: Date) {
   const s = startOfWeekLocal(d);
   const e = new Date(s);
   e.setDate(e.getDate() + 7);
-  return e; // exclusive upper bound
+  return e;
+}
+
+/** ✅ new helper: treat "weekly budget" as THIS week's budget, not historical weeks */
+function isSameLocalWeek(a: Date, b: Date) {
+  const sa = startOfWeekLocal(a).getTime();
+  const sb = startOfWeekLocal(b).getTime();
+  return sa === sb;
+}
+
+function formatPrettyDate(d: Date) {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(d);
+  } catch {
+    return d.toDateString();
+  }
+}
+
+function sameLocalDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function ConfidencePill({
+  label,
+  selected,
+  onPress,
+  flexGrow,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  flexGrow: number;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={{
+        flexGrow,
+        flexBasis: 0,
+        paddingVertical: 10,
+        paddingHorizontal: 10,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: selected ? Theme.text : Theme.border,
+        backgroundColor: Theme.card,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <Text
+        numberOfLines={1}
+        ellipsizeMode="tail"
+        style={{
+          color: Theme.text,
+          fontWeight: "900",
+          fontSize: 12,
+        }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
 }
 
 export default function LogBetScreen() {
   const bump = useAppStore((s) => s.bump);
 
-  // ✅ auto-scroll to top on focus
   const scrollRef = useRef<ScrollView>(null);
   useFocusEffect(
     useCallback(() => {
@@ -253,13 +322,17 @@ export default function LogBetScreen() {
   const [stake, setStake] = useState("");
   const [eventLabel, setEventLabel] = useState("");
 
-  // ✅ no default emotion
+  const [placedAt, setPlacedAt] = useState<Date>(() => new Date());
+  const [betDateModalOpen, setBetDateModalOpen] = useState(false);
+
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [iosCalendarDraft, setIosCalendarDraft] = useState<Date>(() => new Date());
+
   const [emotions, setEmotions] = useState<Emotion[]>([]);
   const EMOTION_MAX = 3;
 
   const [budgetDriver, setBudgetDriver] = useState<Emotion | null>(null);
 
-  // ✅ no default confidence (must choose)
   const [confidence, setConfidence] = useState<Confidence | null>(null);
 
   const [busy, setBusy] = useState(false);
@@ -277,7 +350,7 @@ export default function LogBetScreen() {
   const stakeNum = useMemo(() => Number(stake), [stake]);
 
   const stakeRef = useRef<TextInput | null>(null);
-  const eventRef = useRef<any>(null); // Field ref type depends on your forwardRef
+  const eventRef = useRef<any>(null);
 
   const normalizedSport = useMemo(() => {
     if (sport !== "Other") return sport;
@@ -298,24 +371,69 @@ export default function LogBetScreen() {
   const toggleEmotion = (v: Emotion) => {
     setEmotions((prev) => {
       const has = prev.includes(v);
-
       if (has) return prev.filter((x) => x !== v);
 
       if (prev.length >= EMOTION_MAX) {
         Alert.alert("Too many emotions", `Pick up to ${EMOTION_MAX}.`);
         return prev;
       }
-
       return [...prev, v];
     });
   };
 
   const confidenceLabel = useMemo(() => {
     if (confidence == null) return "—";
-    if (confidence <= 2) return "Low";
+    if (confidence === 1) return "Very low";
+    if (confidence === 2) return "Low";
     if (confidence === 3) return "Medium";
-    return "High";
+    if (confidence === 4) return "High";
+    return "Very high";
   }, [confidence]);
+
+  const placedAtLabel = useMemo(() => {
+    const now = new Date();
+    if (sameLocalDay(placedAt, now)) return `Today · ${formatPrettyDate(placedAt)}`;
+    const y = new Date(now);
+    y.setDate(now.getDate() - 1);
+    if (sameLocalDay(placedAt, y)) return `Yesterday · ${formatPrettyDate(placedAt)}`;
+    return formatPrettyDate(placedAt);
+  }, [placedAt]);
+
+  const applyPickedDate = (pickedDate: Date) => {
+    const now = new Date();
+    const d = new Date(pickedDate);
+
+    if (sameLocalDay(d, now)) {
+      d.setHours(now.getHours(), now.getMinutes(), 0, 0);
+    } else {
+      d.setHours(12, 0, 0, 0);
+    }
+    setPlacedAt(d);
+  };
+
+  const setPlacedAtDaysAgo = (daysAgo: number) => {
+    const now = new Date();
+    const d = new Date(now);
+    d.setDate(now.getDate() - daysAgo);
+
+    if (daysAgo === 0) {
+      d.setHours(now.getHours(), now.getMinutes(), 0, 0);
+    } else {
+      d.setHours(12, 0, 0, 0);
+    }
+    setPlacedAt(d);
+  };
+
+  const openOtherCalendar = () => {
+    setBetDateModalOpen(false);
+
+    if (Platform.OS === "ios") {
+      setIosCalendarDraft(placedAt);
+      setCalendarOpen(true);
+    } else {
+      setCalendarOpen(true);
+    }
+  };
 
   const actuallySaveBet = async () => {
     setBusy(true);
@@ -332,17 +450,13 @@ export default function LogBetScreen() {
         bet_type: normalizedBetType,
         stake: stakeNum,
         event_label: eventLabel.trim() ? eventLabel.trim() : null,
+        placed_at: placedAt.toISOString(),
 
-        // back-compat single
         emotion: emotions[0] ?? null,
-
-        // multi-select
         emotions,
 
         status: "open",
-
-        // ✅ confidence can be null if your column allows it
-        confidence: confidence,
+        confidence,
       };
 
       const { error } = await supabase.from("bets").insert(payload);
@@ -358,9 +472,9 @@ export default function LogBetScreen() {
       setBetTypeOther("");
       setEmotions([]);
       setBudgetDriver(null);
-
-      // ✅ reset to no selection
       setConfidence(null);
+
+      setPlacedAt(new Date());
 
       router.replace("/(tabs)/bets" as any);
     } catch (e: any) {
@@ -370,7 +484,7 @@ export default function LogBetScreen() {
     }
   };
 
-  const getWeeklyBudgetAndUsed = async (userId: string) => {
+  const getGoals = async (userId: string) => {
     const g = await supabase
       .from("goals")
       .select("weekly_budget, max_bet")
@@ -381,17 +495,19 @@ export default function LogBetScreen() {
 
     const weeklyBudget = Number((g.data as any)?.weekly_budget ?? 0);
     const maxBet = Number((g.data as any)?.max_bet ?? 0);
+    return { weeklyBudget, maxBet };
+  };
 
-    const now = new Date();
-    const start = startOfWeekLocal(now);
-    const end = endOfWeekLocalExclusive(now);
+  const getWeeklyUsedForDate = async (userId: string, anchor: Date) => {
+    const start = startOfWeekLocal(anchor);
+    const end = endOfWeekLocalExclusive(anchor);
 
     const usedRes = await supabase
       .from("bets")
-      .select("stake, created_at")
+      .select("stake, placed_at")
       .eq("user_id", userId)
-      .gte("created_at", start.toISOString())
-      .lt("created_at", end.toISOString());
+      .gte("placed_at", start.toISOString())
+      .lt("placed_at", end.toISOString());
 
     if (usedRes.error) throw usedRes.error;
 
@@ -400,7 +516,7 @@ export default function LogBetScreen() {
       return sum + (Number.isFinite(s) ? s : 0);
     }, 0);
 
-    return { weeklyBudget, used, maxBet };
+    return used;
   };
 
   const openBudgetFriction = (budget: number, used: number, thisBet: number) => {
@@ -443,9 +559,12 @@ export default function LogBetScreen() {
       return Alert.alert("Emotion", "Pick at least 1 emotion.");
     }
 
-    // ✅ require confidence to be chosen
     if (confidence == null) {
       return Alert.alert("Confidence", "Pick a confidence level (1–5).");
+    }
+
+    if (!(placedAt instanceof Date) || Number.isNaN(placedAt.getTime())) {
+      return Alert.alert("Bet date", "Please select a valid bet date.");
     }
 
     try {
@@ -455,9 +574,12 @@ export default function LogBetScreen() {
       const user = userData.user;
       if (!user) throw new Error("Not logged in.");
 
-      const { weeklyBudget, used, maxBet } = await getWeeklyBudgetAndUsed(user.id);
+      // ✅ ONLY enforce weekly budget if the bet date is in the current week
+      const enforceWeeklyBudget = isSameLocalWeek(placedAt, new Date());
 
-      // Max bet override
+      const { weeklyBudget, maxBet } = await getGoals(user.id);
+
+      // Max bet applies regardless of date (change if you want)
       if (maxBet > 0 && stakeNum > maxBet) {
         Alert.alert(
           "Over your max bet size",
@@ -467,8 +589,13 @@ export default function LogBetScreen() {
             {
               text: "Log anyway",
               style: "destructive",
-              onPress: () => {
+              onPress: async () => {
+                // If we're not enforcing weekly budget (backdated bet), just save.
+                if (!enforceWeeklyBudget) return actuallySaveBet();
+
+                const used = await getWeeklyUsedForDate(user.id, placedAt);
                 const wouldBeUsed = used + stakeNum;
+
                 if (weeklyBudget > 0 && wouldBeUsed > weeklyBudget) {
                   openBudgetFriction(weeklyBudget, used, stakeNum);
                 } else {
@@ -481,11 +608,15 @@ export default function LogBetScreen() {
         return;
       }
 
-      // Weekly budget friction
-      const wouldBeUsed = used + stakeNum;
-      if (weeklyBudget > 0 && wouldBeUsed > weeklyBudget) {
-        openBudgetFriction(weeklyBudget, used, stakeNum);
-        return;
+      // ✅ Weekly budget friction ONLY for current-week bets
+      if (enforceWeeklyBudget && weeklyBudget > 0) {
+        const used = await getWeeklyUsedForDate(user.id, placedAt);
+        const wouldBeUsed = used + stakeNum;
+
+        if (wouldBeUsed > weeklyBudget) {
+          openBudgetFriction(weeklyBudget, used, stakeNum);
+          return;
+        }
       }
 
       await actuallySaveBet();
@@ -519,6 +650,207 @@ export default function LogBetScreen() {
         onSelect={setBetType}
         onClose={() => setBetTypeOpen(false)}
       />
+
+      {/* Bet date quick-select modal (chips) */}
+      <Modal
+        visible={betDateModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setBetDateModalOpen(false)}
+      >
+        <Pressable
+          onPress={() => setBetDateModalOpen(false)}
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.55)",
+            padding: 16,
+            justifyContent: "flex-end",
+          }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              backgroundColor: Theme.card,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: Theme.border,
+              padding: 14,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
+                Bet date (when you placed it)
+              </Text>
+              <Pressable onPress={() => setBetDateModalOpen(false)} hitSlop={10}>
+                <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
+              </Pressable>
+            </View>
+
+            <View style={{ height: 10 }} />
+
+            <Text style={{ color: Theme.sub, fontWeight: "800" }}>Quick picks</Text>
+            <View style={{ height: 10 }} />
+
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+              <Chip
+                label="Today"
+                selected={sameLocalDay(placedAt, new Date())}
+                onPress={() => {
+                  setPlacedAtDaysAgo(0);
+                  setBetDateModalOpen(false);
+                }}
+              />
+              <Chip
+                label="Yesterday"
+                selected={(() => {
+                  const n = new Date();
+                  n.setDate(n.getDate() - 1);
+                  return sameLocalDay(placedAt, n);
+                })()}
+                onPress={() => {
+                  setPlacedAtDaysAgo(1);
+                  setBetDateModalOpen(false);
+                }}
+              />
+              <Chip
+                label="2 days ago"
+                selected={false}
+                onPress={() => {
+                  setPlacedAtDaysAgo(2);
+                  setBetDateModalOpen(false);
+                }}
+              />
+              <Chip
+                label="3 days ago"
+                selected={false}
+                onPress={() => {
+                  setPlacedAtDaysAgo(3);
+                  setBetDateModalOpen(false);
+                }}
+              />
+              <Chip label="Other…" selected={false} onPress={openOtherCalendar} />
+            </View>
+
+            <View style={{ height: 10 }} />
+            <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
+              Past dates are saved at midday to avoid timezone edge cases.
+            </Text>
+            <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700", marginTop: 6 }}>
+              Weekly budget warnings apply only to bets dated in the current week.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* iOS calendar modal (bottom-sheet, aligned) */}
+      <Modal
+        visible={Platform.OS === "ios" && calendarOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCalendarOpen(false)}
+      >
+        <Pressable
+          onPress={() => setCalendarOpen(false)}
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.55)",
+            padding: 16,
+            justifyContent: "flex-end",
+          }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              backgroundColor: Theme.card,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: Theme.border,
+              padding: 14,
+              maxHeight: "75%",
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
+                Pick a date
+              </Text>
+              <Pressable onPress={() => setCalendarOpen(false)} hitSlop={10}>
+                <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
+              </Pressable>
+            </View>
+
+            <View style={{ height: 10 }} />
+
+            <View
+              style={{
+                backgroundColor: Theme.bg,
+                borderWidth: 1,
+                borderColor: Theme.border,
+                borderRadius: 16,
+                overflow: "hidden",
+              }}
+            >
+              <DateTimePicker
+                value={iosCalendarDraft}
+                mode="date"
+                display="inline"
+                onChange={(_event, selected) => {
+                  if (!selected) return;
+                  setIosCalendarDraft(selected);
+                }}
+              />
+            </View>
+
+            <View style={{ height: 12 }} />
+
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <View style={{ flex: 1 }}>
+                <Button title="Cancel" onPress={() => setCalendarOpen(false)} disabled={busy} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button
+                  title="Apply"
+                  onPress={() => {
+                    applyPickedDate(iosCalendarDraft);
+                    setCalendarOpen(false);
+                  }}
+                  disabled={busy}
+                />
+              </View>
+            </View>
+
+            <View style={{ height: 8 }} />
+            <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
+              Past dates are saved at midday to avoid timezone edge cases.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Android native date picker */}
+      {Platform.OS === "android" && calendarOpen && (
+        <DateTimePicker
+          value={placedAt}
+          mode="date"
+          display="default"
+          onChange={(_event, selected) => {
+            setCalendarOpen(false);
+            if (!selected) return;
+            applyPickedDate(selected);
+          }}
+        />
+      )}
 
       {/* Budget friction modal */}
       <Modal
@@ -632,8 +964,8 @@ export default function LogBetScreen() {
 
             <View style={{ height: 6 }} />
             <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
-              Tip: If this is a “chasing losses” moment, try lowering stake or taking a
-              10-minute break.
+              Tip: If this is a “chasing losses” moment, try lowering stake or taking a 10-minute
+              break.
             </Text>
           </Pressable>
         </Pressable>
@@ -644,11 +976,14 @@ export default function LogBetScreen() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ padding: 16, gap: 14 }}
       >
-        <Text style={{ color: Theme.text, fontSize: 24, fontWeight: "900" }}>
-          Log a Bet
-        </Text>
+        <Text style={{ color: Theme.text, fontSize: 24, fontWeight: "900" }}>Log a Bet</Text>
 
-        {/* SPORT */}
+        <SelectRow
+          label="Bet date"
+          value={placedAtLabel}
+          onPress={() => setBetDateModalOpen(true)}
+        />
+
         <SelectRow
           label="Sport"
           value={
@@ -671,7 +1006,6 @@ export default function LogBetScreen() {
           />
         )}
 
-        {/* BET TYPE */}
         <SelectRow
           label="Bet Type"
           value={
@@ -694,7 +1028,6 @@ export default function LogBetScreen() {
           />
         )}
 
-        {/* STAKE with $ prefix */}
         <View style={{ gap: 6 }}>
           <Text style={{ color: Theme.sub, fontWeight: "800" }}>Stake Amount</Text>
 
@@ -734,7 +1067,6 @@ export default function LogBetScreen() {
           </View>
         </View>
 
-        {/* EVENT (enter should only dismiss keyboard) */}
         <Field
           ref={eventRef}
           label="Game / Event (optional)"
@@ -746,7 +1078,6 @@ export default function LogBetScreen() {
           onSubmitEditing={() => Keyboard.dismiss()}
         />
 
-        {/* EMOTIONS */}
         <View style={{ gap: 6 }}>
           <Text style={{ color: Theme.sub, fontWeight: "800" }}>
             How are you feeling? (pick up to {EMOTION_MAX})
@@ -773,7 +1104,7 @@ export default function LogBetScreen() {
         {/* CONFIDENCE */}
         <View style={{ gap: 6 }}>
           <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            Confidence (1 = Low, 5 = High)
+            Confidence (1 = Very low, 5 = Very high)
           </Text>
           <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
             Current:{" "}
@@ -783,15 +1114,37 @@ export default function LogBetScreen() {
           </Text>
         </View>
 
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-          {([1, 2, 3, 4, 5] as const).map((n) => (
-            <Chip
-              key={n}
-              label={n === 1 ? "1 · Low" : n === 5 ? "5 · High" : `${n}`}
-              selected={confidence === n}
-              onPress={() => setConfidence(n)}
-            />
-          ))}
+        <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+          <ConfidencePill
+            label="1 · Very low"
+            selected={confidence === 1}
+            onPress={() => setConfidence(1)}
+            flexGrow={1.55}
+          />
+          <ConfidencePill
+            label="2"
+            selected={confidence === 2}
+            onPress={() => setConfidence(2)}
+            flexGrow={0.75}
+          />
+          <ConfidencePill
+            label="3"
+            selected={confidence === 3}
+            onPress={() => setConfidence(3)}
+            flexGrow={0.75}
+          />
+          <ConfidencePill
+            label="4"
+            selected={confidence === 4}
+            onPress={() => setConfidence(4)}
+            flexGrow={0.75}
+          />
+          <ConfidencePill
+            label="5 · Very high"
+            selected={confidence === 5}
+            onPress={() => setConfidence(5)}
+            flexGrow={1.55}
+          />
         </View>
 
         <Button title={busy ? "Saving…" : "Log Bet"} onPress={save} disabled={busy} />
