@@ -1,16 +1,18 @@
-// app/SettleBetScreen.tsx  (or wherever your route file lives)
+// app/settle-bet.tsx
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 import { supabase } from "../lib/supabase";
 import { Theme } from "../ui/Theme";
@@ -21,13 +23,11 @@ type Bet = {
   id: string;
   created_at?: string | null;
 
-  // money fields
   stake?: number | null;
   status?: string | null;
   result?: Result | null;
   profit?: number | null;
 
-  // possible title fields (your table might use one of these)
   title?: string | null;
   game?: string | null;
   event?: string | null;
@@ -48,26 +48,35 @@ function startOfMonthISO(d = new Date()) {
 
 function betTitle(bet: Bet | null) {
   if (!bet) return "Bet";
-  return (
-    bet.title ||
-    bet.game ||
-    bet.event ||
-    bet.teams ||
-    bet.description ||
-    "Bet"
-  );
+  return bet.title || bet.game || bet.event || bet.teams || bet.description || "Bet";
+}
+
+/** ✅ Clean numeric input like LogBet stake, but allow 1 leading "-" (optional) + 1 "." */
+function moneyInputClean(t: string) {
+  let s = (t ?? "").replace(/[^\d.\-]/g, "");
+
+  // keep only a single leading "-"
+  const hasNeg = s.startsWith("-");
+  s = s.replace(/-/g, "");
+  if (hasNeg) s = "-" + s;
+
+  const neg = s.startsWith("-");
+  const core = neg ? s.slice(1) : s;
+
+  // keep only first "."
+  const parts = core.split(".");
+  const cleanedCore = parts.length <= 1 ? core : `${parts[0]}.${parts.slice(1).join("")}`;
+
+  return neg ? "-" + cleanedCore : cleanedCore;
 }
 
 export default function SettleBetScreen() {
   const router = useRouter();
   const { betId } = useLocalSearchParams<{ betId?: string }>();
 
-  // --- Use your app Theme (so it matches the rest of the app EXACTLY) ---
-  // We read keys defensively so this screen won’t crash if Theme uses slightly different names.
   const t = Theme as any;
   const pick = (keys: string[], fallback: string) =>
-    keys.map((k) => t?.[k]).find((v) => typeof v === "string" && v.length) ??
-    fallback;
+    keys.map((k) => t?.[k]).find((v) => typeof v === "string" && v.length) ?? fallback;
 
   const colors = {
     bg: pick(["bg", "background", "screen", "page"], "#0b1220"),
@@ -87,11 +96,12 @@ export default function SettleBetScreen() {
   const [saving, setSaving] = useState(false);
 
   const [bet, setBet] = useState<Bet | null>(null);
-
   const [result, setResult] = useState<Result | null>(null);
-  const [profitText, setProfitText] = useState("");
 
-  // later you can pull this from a goals table / profile
+  // profit string input (for win)
+  const [profitText, setProfitText] = useState("");
+  const profitNum = useMemo(() => Number(profitText), [profitText]);
+
   const monthlyLimit = 800;
   const [monthNetLossSoFar, setMonthNetLossSoFar] = useState(0);
 
@@ -129,9 +139,8 @@ export default function SettleBetScreen() {
         if (!b) throw new Error("Bet not found.");
 
         setBet(b);
-
         if (b.result) setResult(b.result);
-        if (typeof b.profit === "number") setProfitText(String(b.profit));
+        if (typeof b.profit === "number" && Number.isFinite(b.profit)) setProfitText(String(b.profit));
 
         const monthStart = startOfMonthISO(new Date());
 
@@ -144,7 +153,7 @@ export default function SettleBetScreen() {
 
         if (monthErr) throw monthErr;
 
-        // net loss: loss adds stake, win subtracts profit, push adds 0
+        // Net losses this month: losses add stake, wins subtract profit
         const net = (settled ?? []).reduce((acc: number, row: any) => {
           if (row.result === "loss") return acc + Number(row.stake || 0);
           if (row.result === "win") return acc - Number(row.profit || 0);
@@ -175,7 +184,6 @@ export default function SettleBetScreen() {
     if (!bet || !result) return null;
     if (result === "loss") return monthNetLossSoFar + stake;
     if (result === "push") return monthNetLossSoFar;
-    // win
     return monthNetLossSoFar - (profitValue ?? 0);
   }, [bet, result, monthNetLossSoFar, profitValue, stake]);
 
@@ -191,10 +199,7 @@ export default function SettleBetScreen() {
 
     if (result === "win") {
       if (profitValue === null || profitValue <= 0) {
-        Alert.alert(
-          "Enter profit",
-          "For a Win, enter a profit amount (example: 75)."
-        );
+        Alert.alert("Enter profit", "For a Win, enter a profit amount (example: 75).");
         return;
       }
       profitToSave = profitValue;
@@ -207,7 +212,7 @@ export default function SettleBetScreen() {
         .update({
           status: "settled",
           result,
-          profit: profitToSave, // null for loss/push
+          profit: profitToSave,
           settled_at: new Date().toISOString(),
         })
         .eq("id", bet.id);
@@ -251,16 +256,35 @@ export default function SettleBetScreen() {
     };
   };
 
+  // ✅ Move the back button down ~8% of screen height, but keep it sensible across devices.
+  const screenH = Dimensions.get("window").height;
+  const backTop = Math.max(12, Math.round(screenH * 0.08));
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={{ flex: 1 }}
+      {/* ✅ ALWAYS-VISIBLE Back button */}
+      <Pressable
+        onPress={() => router.back()}
+        hitSlop={12}
+        style={{
+          position: "absolute",
+          top: backTop,
+          left: 12,
+          zIndex: 9999,
+          paddingVertical: 10,
+          paddingHorizontal: 12,
+          borderRadius: 999,
+          borderWidth: 1,
+          borderColor: colors.border,
+          backgroundColor: colors.card,
+        }}
       >
-        <View style={{ padding: 16 }}>
-          <Text style={{ fontSize: 22, fontWeight: "800", color: colors.text }}>
-            Settle Bet
-          </Text>
+        <Text style={{ color: colors.text, fontWeight: "900" }}>← Back</Text>
+      </Pressable>
+
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+        <View style={{ padding: 16, paddingTop: 56 }}>
+          <Text style={{ fontSize: 22, fontWeight: "800", color: colors.text }}>Settle Bet</Text>
 
           <View
             style={{
@@ -272,62 +296,93 @@ export default function SettleBetScreen() {
               backgroundColor: colors.card,
             }}
           >
-            <Text style={{ fontSize: 18, fontWeight: "800", color: colors.text }}>
-              {betTitle(bet)}
-            </Text>
+            <Text style={{ fontSize: 18, fontWeight: "800", color: colors.text }}>{betTitle(bet)}</Text>
 
             <Text style={{ marginTop: 6, color: colors.muted, fontWeight: "600" }}>
               Stake: {money(stake)}
             </Text>
 
-            <Text style={{ marginTop: 18, fontSize: 16, fontWeight: "800", color: colors.text }}>
-              Result
-            </Text>
+            <Text style={{ marginTop: 18, fontSize: 16, fontWeight: "800", color: colors.text }}>Result</Text>
 
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-              <Pressable onPress={() => setResult("win")} style={pillStyle("win")}>
+              <Pressable
+                onPress={() => {
+                  setResult("win");
+                  // keep any existing input
+                }}
+                style={pillStyle("win")}
+              >
                 <Text style={pillText("win")}>Win</Text>
               </Pressable>
 
-              <Pressable onPress={() => setResult("loss")} style={pillStyle("loss")}>
+              <Pressable
+                onPress={() => {
+                  setResult("loss");
+                  Keyboard.dismiss();
+                }}
+                style={pillStyle("loss")}
+              >
                 <Text style={pillText("loss")}>Loss</Text>
               </Pressable>
 
-              <Pressable onPress={() => setResult("push")} style={pillStyle("push")}>
+              <Pressable
+                onPress={() => {
+                  setResult("push");
+                  Keyboard.dismiss();
+                }}
+                style={pillStyle("push")}
+              >
                 <Text style={pillText("push")}>Push</Text>
               </Pressable>
             </View>
 
+            {/* ✅ Profit entry matches LogBet stake UI */}
             {result === "win" ? (
-              <View style={{ marginTop: 16 }}>
-                <Text style={{ fontSize: 16, fontWeight: "800", color: colors.text }}>
-                  If Win:
-                </Text>
+              <View style={{ marginTop: 16, gap: 10 }}>
+                <Text style={{ fontSize: 16, fontWeight: "800", color: colors.text }}>If Win:</Text>
 
-                <Text style={{ marginTop: 10, fontWeight: "800", color: colors.text }}>
-                  Profit:
-                </Text>
+                <View style={{ gap: 6 }}>
+                  <Text style={{ color: colors.muted, fontWeight: "800" }}>Profit Amount</Text>
 
-                <View
-                  style={{
-                    marginTop: 8,
-                    borderWidth: 1,
-                    borderColor: colors.border,
-                    borderRadius: 12,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    backgroundColor: colors.inputBg,
-                  }}
-                >
-                  <TextInput
-                    value={profitText}
-                    onChangeText={setProfitText}
-                    keyboardType="numeric"
-                    placeholder="$ _______"
-                    placeholderTextColor={colors.placeholder}
-                    style={{ fontSize: 16, color: colors.text }}
-                    selectionColor={colors.primary}
-                  />
+                  <View
+                    style={{
+                      backgroundColor: colors.card,
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      borderRadius: 14,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <Text style={{ color: colors.text, fontWeight: "900", fontSize: 16 }}>$</Text>
+
+                    <TextInput
+                      value={profitText}
+                      onChangeText={(t) => setProfitText(moneyInputClean(t))}
+                      keyboardType="numeric"
+                      returnKeyType="done"
+                      blurOnSubmit
+                      onSubmitEditing={() => Keyboard.dismiss()}
+                      placeholder="0"
+                      placeholderTextColor={colors.placeholder}
+                      selectionColor={colors.primary}
+                      style={{
+                        flex: 1,
+                        color: colors.text,
+                        fontSize: 16,
+                        fontWeight: "800",
+                        padding: 0,
+                        margin: 0,
+                      }}
+                    />
+                  </View>
+
+                  <Text style={{ color: colors.muted, fontSize: 12, fontWeight: "700" }}>
+                    Enter profit only (example: 75)
+                  </Text>
                 </View>
               </View>
             ) : null}
@@ -345,9 +400,7 @@ export default function SettleBetScreen() {
               </Text>
 
               <Text style={{ marginTop: 8, fontSize: 18, fontWeight: "900", color: colors.text }}>
-                {monthlyAfter === null
-                  ? "--"
-                  : `${money(monthlyAfter)} / ${money(monthlyLimit)}`}
+                {monthlyAfter === null ? "--" : `${money(monthlyAfter)} / ${money(monthlyLimit)}`}
               </Text>
             </View>
 

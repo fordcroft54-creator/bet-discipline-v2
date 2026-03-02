@@ -2,12 +2,14 @@ import { useFocusEffect, router } from "expo-router";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Dimensions,
   Keyboard,
   Modal,
   Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
@@ -21,17 +23,11 @@ import { Field } from "../ui/Field";
 import { Theme } from "../ui/Theme";
 
 /**
- * Updates:
- * ✅ Keeps default bet date = Today
- * ✅ Adds quick chips: Today / Yesterday / 2 days ago / 3 days ago / Other
- * ✅ "Other" opens native calendar picker
- *    - iOS: inline picker inside a bottom-sheet modal (aligned w/ your other selectors)
- *    - Android: native picker modal
- * ✅ Stores placed_at as NOW time if Today, otherwise stores at 12:00 local time (TZ safe)
- * ✅ Weekly budget is ONLY enforced for bets in the CURRENT week (not backdated bets)
- * ✅ Confidence labels: 1 = Very low, 5 = Very high
- * ✅ NEW: Confidence buttons are custom oval pills (not Chip), with 1 & 5 wider,
- *         and everything stays on ONE line on an average iPhone.
+ * LogBetScreen (touch fix)
+ * ✅ Fixes “can’t tap date row / top fields” by preventing backdrop Pressables from stealing touches
+ * ✅ Bet date modal + Other -> native picker
+ * ✅ Keeps all prior functionality
+ * ✅ REMOVED emotion selector from weekly budget friction modal
  */
 
 const SPORTS = [
@@ -60,35 +56,116 @@ const BET_TYPES = [
   "Other",
 ] as const;
 
-const EMOTIONS = [
-  { label: "😐 Bored", value: "bored" },
-  { label: "😤 Chasing losses", value: "chasing_losses" },
-  { label: "😡 Tilted / frustrated", value: "tilted" },
-  { label: "😰 Stressed", value: "stressed" },
-  { label: "🍺 Drinking", value: "drinking" },
-  { label: "⚡ Impulsive", value: "impulsive" },
-
-  { label: "🔁 Habit / routine", value: "habit" },
-  { label: "👯 Social / with friends", value: "social" },
-  { label: "🎉 Confident", value: "confident" },
-  { label: "🙂 Just for fun", value: "fun" },
-
-  { label: "🧠 Pre-planned", value: "pre_planned" },
-  { label: "💸 Within budget", value: "within_budget" },
-] as const;
+const EMOTION_GROUPS = {
+  strategic: {
+    title: "🎯 Strategic",
+    subtitle: "Intentional, thought-out bets",
+    items: [
+      { label: "🎉 Confident", value: "confident" },
+      { label: "🧠 Research-based", value: "research" },
+      { label: "📊 System play", value: "system" },
+      { label: "🗓️ Pre-planned", value: "pre_planned" },
+    ],
+  },
+  recreational: {
+    title: "🎉 Recreational",
+    subtitle: "For fun or social vibes",
+    items: [
+      { label: "🙂 Just for fun", value: "fun" },
+      { label: "👯 Social / with friends", value: "social" },
+      { label: "🔁 Habit / routine", value: "habit" },
+    ],
+  },
+  situational: {
+    title: "⚠️ Situational",
+    subtitle: "Not bad — just worth noticing",
+    items: [
+      { label: "😐 Bored", value: "bored" },
+      { label: "😬 FOMO", value: "fomo" },
+      { label: "⚡ Impulsive", value: "impulsive" },
+      { label: "😰 Stressed", value: "stressed" },
+      { label: "🍺 Drinking", value: "drinking" },
+    ],
+  },
+  reactive: {
+    title: "🔥 Reactive",
+    subtitle: "Emotion-driven patterns to watch",
+    items: [
+      { label: "😤 Chasing losses", value: "chasing_losses" },
+      { label: "😡 Tilted / frustrated", value: "tilted" },
+      { label: "💢 Revenge bet", value: "revenge" },
+      { label: "🔁 Doubling down", value: "doubling_down" },
+      { label: "😵‍💫 Desperate", value: "desperate" },
+    ],
+  },
+} as const;
 
 type Sport = (typeof SPORTS)[number];
 type BetType = (typeof BET_TYPES)[number];
-type Emotion = (typeof EMOTIONS)[number]["value"];
+
+type Emotion =
+  | (typeof EMOTION_GROUPS.strategic.items)[number]["value"]
+  | (typeof EMOTION_GROUPS.recreational.items)[number]["value"]
+  | (typeof EMOTION_GROUPS.situational.items)[number]["value"]
+  | (typeof EMOTION_GROUPS.reactive.items)[number]["value"];
+
 type Confidence = 1 | 2 | 3 | 4 | 5;
 
-const EMOTION_LABEL_BY_VALUE: Record<Emotion, string> = EMOTIONS.reduce(
+const ALL_EMOTIONS = [
+  ...EMOTION_GROUPS.strategic.items,
+  ...EMOTION_GROUPS.recreational.items,
+  ...EMOTION_GROUPS.situational.items,
+  ...EMOTION_GROUPS.reactive.items,
+] as const;
+
+const EMOTION_LABEL_BY_VALUE: Record<string, string> = ALL_EMOTIONS.reduce(
   (acc, e) => {
-    acc[e.value as Emotion] = e.label;
+    acc[e.value] = e.label;
     return acc;
   },
-  {} as Record<Emotion, string>
+  {} as Record<string, string>
 );
+
+/** ✅ Touch-safe sheet modal: backdrop is its own layer BEHIND content */
+function SheetModal({
+  visible,
+  onClose,
+  children,
+  position = "bottom",
+  maxHeight = "80%",
+}: {
+  visible: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+  position?: "bottom" | "center";
+  maxHeight?: number | string;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View
+        style={[
+          styles.modalWrap,
+          { justifyContent: position === "center" ? "center" : "flex-end" },
+        ]}
+        pointerEvents="box-none"
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: Theme.card,
+              borderColor: Theme.border,
+              maxHeight: (maxHeight ?? "80%") as any,
+            },
+          ]}
+        >
+          {children}
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 function SelectModal<T extends string>({
   title,
@@ -106,62 +183,111 @@ function SelectModal<T extends string>({
   onClose: () => void;
 }) {
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
-        style={{
-          flex: 1,
-          backgroundColor: "rgba(0,0,0,0.55)",
-          padding: 16,
-          justifyContent: "flex-end",
-        }}
-      >
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: Theme.card,
-            borderRadius: 16,
-            padding: 14,
-            borderWidth: 1,
-            borderColor: Theme.border,
-            maxHeight: "70%",
-          }}
-        >
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
-              {title}
-            </Text>
-            <Pressable onPress={onClose} hitSlop={10}>
-              <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
-            </Pressable>
-          </View>
-
-          <View style={{ height: 10 }} />
-
-          <ScrollView keyboardShouldPersistTaps="handled">
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              {options.map((opt) => (
-                <Chip
-                  key={opt}
-                  label={opt}
-                  selected={selected === opt}
-                  onPress={() => {
-                    onSelect(opt);
-                    onClose();
-                  }}
-                />
-              ))}
-            </View>
-          </ScrollView>
+    <SheetModal visible={visible} onClose={onClose} position="bottom" maxHeight="70%">
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>{title}</Text>
+        <Pressable onPress={onClose} hitSlop={10}>
+          <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
         </Pressable>
-      </Pressable>
-    </Modal>
+      </View>
+
+      <View style={{ height: 10 }} />
+
+      <ScrollView keyboardShouldPersistTaps="always">
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+          {options.map((opt) => (
+            <Chip
+              key={opt}
+              label={opt}
+              selected={selected === opt}
+              onPress={() => {
+                onSelect(opt);
+                onClose();
+              }}
+            />
+          ))}
+        </View>
+      </ScrollView>
+    </SheetModal>
+  );
+}
+
+function BetDateModal({
+  visible,
+  placedAtLabel,
+  onClose,
+  onPickQuick,
+  onPickOther,
+}: {
+  visible: boolean;
+  placedAtLabel: string;
+  onClose: () => void;
+  onPickQuick: (daysAgo: number) => void;
+  onPickOther: () => void;
+}) {
+  return (
+    <SheetModal visible={visible} onClose={onClose} position="bottom" maxHeight="55%">
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <View style={{ flex: 1, paddingRight: 10 }}>
+          <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>Bet date</Text>
+          <Text style={{ color: Theme.sub, fontWeight: "800", marginTop: 2 }}>{placedAtLabel}</Text>
+        </View>
+        <Pressable onPress={onClose} hitSlop={10}>
+          <Text style={{ color: Theme.sub, fontWeight: "900" }}>Close</Text>
+        </Pressable>
+      </View>
+
+      <View style={{ height: 12 }} />
+
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+        <Chip
+          label="Today"
+          selected={false}
+          onPress={() => {
+            onPickQuick(0);
+            onClose();
+          }}
+        />
+        <Chip
+          label="Yesterday"
+          selected={false}
+          onPress={() => {
+            onPickQuick(1);
+            onClose();
+          }}
+        />
+        <Chip
+          label="2 days ago"
+          selected={false}
+          onPress={() => {
+            onPickQuick(2);
+            onClose();
+          }}
+        />
+        <Chip
+          label="3 days ago"
+          selected={false}
+          onPress={() => {
+            onPickQuick(3);
+            onClose();
+          }}
+        />
+        <Chip
+          label="Other…"
+          selected={false}
+          onPress={() => {
+            onClose();
+            onPickOther();
+          }}
+        />
+      </View>
+
+      <View style={{ height: 14 }} />
+
+      <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
+        Tip: “Other…” lets you pick any date.
+      </Text>
+    </SheetModal>
   );
 }
 
@@ -190,17 +316,8 @@ function SelectRow({
       }}
     >
       <View style={{ flex: 1, paddingRight: 10 }}>
-        <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "800" }}>
-          {label}
-        </Text>
-        <Text
-          style={{
-            color: Theme.text,
-            fontSize: 16,
-            fontWeight: "900",
-            marginTop: 2,
-          }}
-        >
+        <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "800" }}>{label}</Text>
+        <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900", marginTop: 2 }}>
           {value}
         </Text>
       </View>
@@ -230,7 +347,21 @@ function endOfWeekLocalExclusive(d: Date) {
   return e;
 }
 
-/** ✅ new helper: treat "weekly budget" as THIS week's budget, not historical weeks */
+function startOfMonthLocal(d: Date) {
+  const x = new Date(d);
+  x.setDate(1);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function endOfMonthLocalExclusive(d: Date) {
+  const s = startOfMonthLocal(d);
+  const e = new Date(s);
+  e.setMonth(e.getMonth() + 1);
+  return e;
+}
+
+/** weekly budget applies only to CURRENT local week */
 function isSameLocalWeek(a: Date, b: Date) {
   const sa = startOfWeekLocal(a).getTime();
   const sb = startOfWeekLocal(b).getTime();
@@ -276,7 +407,7 @@ function ConfidencePill({
         flexGrow,
         flexBasis: 0,
         paddingVertical: 10,
-        paddingHorizontal: 10,
+        paddingHorizontal: 8,
         borderRadius: 999,
         borderWidth: 1,
         borderColor: selected ? Theme.text : Theme.border,
@@ -285,18 +416,46 @@ function ConfidencePill({
         justifyContent: "center",
       }}
     >
-      <Text
-        numberOfLines={1}
-        ellipsizeMode="tail"
-        style={{
-          color: Theme.text,
-          fontWeight: "900",
-          fontSize: 12,
-        }}
-      >
+      <Text numberOfLines={1} style={{ color: Theme.text, fontWeight: "900", fontSize: 11 }}>
         {label}
       </Text>
     </Pressable>
+  );
+}
+
+function EmotionSection({
+  title,
+  subtitle,
+  items,
+  selected,
+  onToggle,
+}: {
+  title: string;
+  subtitle?: string;
+  items: readonly { label: string; value: Emotion }[];
+  selected: Emotion[];
+  onToggle: (v: Emotion) => void;
+}) {
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={{ gap: 2 }}>
+        <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 14 }}>{title}</Text>
+        {subtitle ? (
+          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>{subtitle}</Text>
+        ) : null}
+      </View>
+
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+        {items.map((e) => (
+          <Chip
+            key={e.value}
+            label={e.label}
+            selected={selected.includes(e.value)}
+            onPress={() => onToggle(e.value)}
+          />
+        ))}
+      </View>
+    </View>
   );
 }
 
@@ -304,14 +463,6 @@ export default function LogBetScreen() {
   const bump = useAppStore((s) => s.bump);
 
   const scrollRef = useRef<ScrollView>(null);
-  useFocusEffect(
-    useCallback(() => {
-      const t = setTimeout(() => {
-        scrollRef.current?.scrollTo({ y: 0, animated: false });
-      }, 0);
-      return () => clearTimeout(t);
-    }, [])
-  );
 
   const [sport, setSport] = useState<Sport>("NFL");
   const [betType, setBetType] = useState<BetType>("Straight / Moneyline");
@@ -331,8 +482,6 @@ export default function LogBetScreen() {
   const [emotions, setEmotions] = useState<Emotion[]>([]);
   const EMOTION_MAX = 3;
 
-  const [budgetDriver, setBudgetDriver] = useState<Emotion | null>(null);
-
   const [confidence, setConfidence] = useState<Confidence | null>(null);
 
   const [busy, setBusy] = useState(false);
@@ -340,6 +489,7 @@ export default function LogBetScreen() {
   const [sportOpen, setSportOpen] = useState(false);
   const [betTypeOpen, setBetTypeOpen] = useState(false);
 
+  // “About to exceed weekly budget” friction modal (scrollable)
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
   const [budgetModalData, setBudgetModalData] = useState<{
     budget: number;
@@ -347,10 +497,30 @@ export default function LogBetScreen() {
     thisBet: number;
   } | null>(null);
 
+  // “You’re already over caps” warning modal on tab open
+  const [capWarningOpen, setCapWarningOpen] = useState(false);
+  const [capWarning, setCapWarning] = useState<{
+    weeklyBudget?: number;
+    weeklyUsed?: number;
+    weeklyOver?: number;
+    monthlyLossCap?: number;
+    monthlyLossUsed?: number;
+    monthlyOver?: number;
+  } | null>(null);
+
   const stakeNum = useMemo(() => Number(stake), [stake]);
 
   const stakeRef = useRef<TextInput | null>(null);
   const eventRef = useRef<any>(null);
+
+  // ✅ used for “scroll stake to ~10% down screen”
+  const stakeYRef = useRef<number>(0);
+  const scrollToStakeWithOffset = (animated = true) => {
+    const h = Dimensions.get("window").height || 800;
+    const offset = Math.round(h * 0.1); // ✅ 10%
+    const targetY = Math.max(0, stakeYRef.current - offset);
+    scrollRef.current?.scrollTo({ y: targetY, animated });
+  };
 
   const normalizedSport = useMemo(() => {
     if (sport !== "Other") return sport;
@@ -374,7 +544,7 @@ export default function LogBetScreen() {
       if (has) return prev.filter((x) => x !== v);
 
       if (prev.length >= EMOTION_MAX) {
-        Alert.alert("Too many emotions", `Pick up to ${EMOTION_MAX}.`);
+        Alert.alert("Too many selections", `Pick up to ${EMOTION_MAX}.`);
         return prev;
       }
       return [...prev, v];
@@ -426,13 +596,81 @@ export default function LogBetScreen() {
 
   const openOtherCalendar = () => {
     setBetDateModalOpen(false);
-
     if (Platform.OS === "ios") {
       setIosCalendarDraft(placedAt);
-      setCalendarOpen(true);
-    } else {
-      setCalendarOpen(true);
     }
+    setCalendarOpen(true);
+  };
+
+  const getGoals = async (userId: string) => {
+    const g = await supabase
+      .from("goals")
+      .select("weekly_budget, max_bet, monthly_loss_cap")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (g.error) throw g.error;
+
+    const weeklyBudget = Number((g.data as any)?.weekly_budget ?? 0);
+    const maxBet = Number((g.data as any)?.max_bet ?? 0);
+    const monthlyLossCap = Number((g.data as any)?.monthly_loss_cap ?? 0);
+
+    return { weeklyBudget, maxBet, monthlyLossCap };
+  };
+
+  const getWeeklyUsedForDate = async (userId: string, anchor: Date) => {
+    const start = startOfWeekLocal(anchor);
+    const end = endOfWeekLocalExclusive(anchor);
+
+    const usedRes = await supabase
+      .from("bets")
+      .select("stake, placed_at")
+      .eq("user_id", userId)
+      .gte("placed_at", start.toISOString())
+      .lt("placed_at", end.toISOString());
+
+    if (usedRes.error) throw usedRes.error;
+
+    const used = (usedRes.data ?? []).reduce((sum: number, row: any) => {
+      const s = Number(row?.stake ?? 0);
+      return sum + (Number.isFinite(s) ? s : 0);
+    }, 0);
+
+    return used;
+  };
+
+  const getMonthlyLossUsed = async (userId: string, anchor: Date) => {
+    const start = startOfMonthLocal(anchor);
+    const end = endOfMonthLocalExclusive(anchor);
+
+    const res = await supabase
+      .from("bets")
+      .select("profit, result, stake, settled_at, placed_at, status")
+      .eq("user_id", userId)
+      .or(
+        `and(settled_at.gte.${start.toISOString()},settled_at.lt.${end.toISOString()}),and(settled_at.is.null,placed_at.gte.${start.toISOString()},placed_at.lt.${end.toISOString()})`
+      );
+
+    if (res.error) throw res.error;
+
+    const used = (res.data ?? []).reduce((sum: number, row: any) => {
+      const profit = Number(row?.profit);
+      if (Number.isFinite(profit) && profit < 0) return sum + Math.abs(profit);
+
+      const result = String(row?.result ?? "");
+      if (result === "loss") {
+        const stake = Number(row?.stake ?? 0);
+        if (Number.isFinite(stake) && stake > 0) return sum + stake;
+      }
+      return sum;
+    }, 0);
+
+    return used;
+  };
+
+  const openBudgetFriction = (budget: number, used: number, thisBet: number) => {
+    setBudgetModalData({ budget, used, thisBet });
+    setBudgetModalOpen(true);
   };
 
   const actuallySaveBet = async () => {
@@ -471,9 +709,7 @@ export default function LogBetScreen() {
       setSportOther("");
       setBetTypeOther("");
       setEmotions([]);
-      setBudgetDriver(null);
       setConfidence(null);
-
       setPlacedAt(new Date());
 
       router.replace("/(tabs)/bets" as any);
@@ -484,58 +720,11 @@ export default function LogBetScreen() {
     }
   };
 
-  const getGoals = async (userId: string) => {
-    const g = await supabase
-      .from("goals")
-      .select("weekly_budget, max_bet")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (g.error) throw g.error;
-
-    const weeklyBudget = Number((g.data as any)?.weekly_budget ?? 0);
-    const maxBet = Number((g.data as any)?.max_bet ?? 0);
-    return { weeklyBudget, maxBet };
-  };
-
-  const getWeeklyUsedForDate = async (userId: string, anchor: Date) => {
-    const start = startOfWeekLocal(anchor);
-    const end = endOfWeekLocalExclusive(anchor);
-
-    const usedRes = await supabase
-      .from("bets")
-      .select("stake, placed_at")
-      .eq("user_id", userId)
-      .gte("placed_at", start.toISOString())
-      .lt("placed_at", end.toISOString());
-
-    if (usedRes.error) throw usedRes.error;
-
-    const used = (usedRes.data ?? []).reduce((sum: number, row: any) => {
-      const s = Number(row?.stake ?? 0);
-      return sum + (Number.isFinite(s) ? s : 0);
-    }, 0);
-
-    return used;
-  };
-
-  const openBudgetFriction = (budget: number, used: number, thisBet: number) => {
-    setBudgetDriver(null);
-    setBudgetModalData({ budget, used, thisBet });
-    setBudgetModalOpen(true);
-  };
-
+  // ✅ No more emotion selector in this modal — just proceed
   const continueFromBudgetModal = async () => {
     if (!budgetModalData) return;
-
-    if (!budgetDriver) {
-      Alert.alert("Quick check-in", "What’s driving this bet right now?");
-      return;
-    }
-
     setBudgetModalOpen(false);
     setBudgetModalData(null);
-
     await actuallySaveBet();
   };
 
@@ -546,23 +735,18 @@ export default function LogBetScreen() {
     if (!stake || !Number.isFinite(stakeNum) || stakeNum <= 0) {
       return Alert.alert("Missing stake", "Enter a valid stake amount.");
     }
-
     if (sport === "Other" && !sportOther.trim()) {
       return Alert.alert("Sport", "Please type the sport (or pick a listed one).");
     }
-
     if (betType === "Other" && !betTypeOther.trim()) {
       return Alert.alert("Bet type", "Please type the bet type (or pick a listed one).");
     }
-
     if (!emotions.length) {
-      return Alert.alert("Emotion", "Pick at least 1 emotion.");
+      return Alert.alert("Check-in", "Pick at least 1 selection.");
     }
-
     if (confidence == null) {
       return Alert.alert("Confidence", "Pick a confidence level (1–5).");
     }
-
     if (!(placedAt instanceof Date) || Number.isNaN(placedAt.getTime())) {
       return Alert.alert("Bet date", "Please select a valid bet date.");
     }
@@ -574,12 +758,9 @@ export default function LogBetScreen() {
       const user = userData.user;
       if (!user) throw new Error("Not logged in.");
 
-      // ✅ ONLY enforce weekly budget if the bet date is in the current week
       const enforceWeeklyBudget = isSameLocalWeek(placedAt, new Date());
-
       const { weeklyBudget, maxBet } = await getGoals(user.id);
 
-      // Max bet applies regardless of date (change if you want)
       if (maxBet > 0 && stakeNum > maxBet) {
         Alert.alert(
           "Over your max bet size",
@@ -590,7 +771,6 @@ export default function LogBetScreen() {
               text: "Log anyway",
               style: "destructive",
               onPress: async () => {
-                // If we're not enforcing weekly budget (backdated bet), just save.
                 if (!enforceWeeklyBudget) return actuallySaveBet();
 
                 const used = await getWeeklyUsedForDate(user.id, placedAt);
@@ -608,7 +788,6 @@ export default function LogBetScreen() {
         return;
       }
 
-      // ✅ Weekly budget friction ONLY for current-week bets
       if (enforceWeeklyBudget && weeklyBudget > 0) {
         const used = await getWeeklyUsedForDate(user.id, placedAt);
         const wouldBeUsed = used + stakeNum;
@@ -632,6 +811,65 @@ export default function LogBetScreen() {
     return Math.max(0, after - budget);
   }, [budgetModalData]);
 
+  // ✅ Show cap warning EVERY time user focuses Log tab (no session de-dupe)
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      let timeoutId: any;
+
+      const run = async () => {
+        timeoutId = setTimeout(() => {
+          scrollRef.current?.scrollTo({ y: 0, animated: false });
+        }, 0);
+
+        try {
+          const { data: userData, error: userErr } = await supabase.auth.getUser();
+          if (userErr) throw userErr;
+          const user = userData.user;
+          if (!user) return;
+
+          const now = new Date();
+          const { weeklyBudget, monthlyLossCap } = await getGoals(user.id);
+
+          const [weeklyUsed, monthlyLossUsed] = await Promise.all([
+            weeklyBudget > 0 ? getWeeklyUsedForDate(user.id, now) : Promise.resolve(0),
+            monthlyLossCap > 0 ? getMonthlyLossUsed(user.id, now) : Promise.resolve(0),
+          ]);
+
+          const weeklyOver = weeklyBudget > 0 ? Math.max(0, weeklyUsed - weeklyBudget) : 0;
+          const monthlyOver = monthlyLossCap > 0 ? Math.max(0, monthlyLossUsed - monthlyLossCap) : 0;
+
+          if (!alive) return;
+
+          if (weeklyOver > 0 || monthlyOver > 0) {
+            setCapWarning({
+              weeklyBudget: weeklyBudget > 0 ? weeklyBudget : undefined,
+              weeklyUsed: weeklyBudget > 0 ? weeklyUsed : undefined,
+              weeklyOver: weeklyOver > 0 ? weeklyOver : undefined,
+
+              monthlyLossCap: monthlyLossCap > 0 ? monthlyLossCap : undefined,
+              monthlyLossUsed: monthlyLossCap > 0 ? monthlyLossUsed : undefined,
+              monthlyOver: monthlyOver > 0 ? monthlyOver : undefined,
+            });
+            setCapWarningOpen(true);
+          } else {
+            setCapWarningOpen(false);
+            setCapWarning(null);
+          }
+        } catch {
+          // silent
+        }
+      };
+
+      run();
+
+      return () => {
+        alive = false;
+        if (timeoutId) clearTimeout(timeoutId);
+      };
+    }, [])
+  );
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg }}>
       <SelectModal
@@ -651,348 +889,251 @@ export default function LogBetScreen() {
         onClose={() => setBetTypeOpen(false)}
       />
 
-      {/* Bet date quick-select modal (chips) */}
-      <Modal
+      {/* ✅ Bet date quick modal */}
+      <BetDateModal
         visible={betDateModalOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setBetDateModalOpen(false)}
+        placedAtLabel={placedAtLabel}
+        onClose={() => setBetDateModalOpen(false)}
+        onPickQuick={(daysAgo) => setPlacedAtDaysAgo(daysAgo)}
+        onPickOther={() => openOtherCalendar()}
+      />
+
+      {/* ✅ Native calendar (touch-safe) */}
+      <SheetModal
+        visible={calendarOpen}
+        onClose={() => setCalendarOpen(false)}
+        position="bottom"
+        maxHeight={Platform.OS === "ios" ? 360 : 420}
       >
-        <Pressable
-          onPress={() => setBetDateModalOpen(false)}
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.55)",
-            padding: 16,
-            justifyContent: "flex-end",
-          }}
-        >
-          <Pressable
-            onPress={() => {}}
-            style={{
-              backgroundColor: Theme.card,
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: Theme.border,
-              padding: 14,
-            }}
-          >
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
-                Bet date (when you placed it)
-              </Text>
-              <Pressable onPress={() => setBetDateModalOpen(false)} hitSlop={10}>
-                <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
-              </Pressable>
-            </View>
-
-            <View style={{ height: 10 }} />
-
-            <Text style={{ color: Theme.sub, fontWeight: "800" }}>Quick picks</Text>
-            <View style={{ height: 10 }} />
-
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              <Chip
-                label="Today"
-                selected={sameLocalDay(placedAt, new Date())}
-                onPress={() => {
-                  setPlacedAtDaysAgo(0);
-                  setBetDateModalOpen(false);
-                }}
-              />
-              <Chip
-                label="Yesterday"
-                selected={(() => {
-                  const n = new Date();
-                  n.setDate(n.getDate() - 1);
-                  return sameLocalDay(placedAt, n);
-                })()}
-                onPress={() => {
-                  setPlacedAtDaysAgo(1);
-                  setBetDateModalOpen(false);
-                }}
-              />
-              <Chip
-                label="2 days ago"
-                selected={false}
-                onPress={() => {
-                  setPlacedAtDaysAgo(2);
-                  setBetDateModalOpen(false);
-                }}
-              />
-              <Chip
-                label="3 days ago"
-                selected={false}
-                onPress={() => {
-                  setPlacedAtDaysAgo(3);
-                  setBetDateModalOpen(false);
-                }}
-              />
-              <Chip label="Other…" selected={false} onPress={openOtherCalendar} />
-            </View>
-
-            <View style={{ height: 10 }} />
-            <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
-              Past dates are saved at midday to avoid timezone edge cases.
-            </Text>
-            <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700", marginTop: 6 }}>
-              Weekly budget warnings apply only to bets dated in the current week.
-            </Text>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+          <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>Pick a date</Text>
+          <Pressable onPress={() => setCalendarOpen(false)} hitSlop={10}>
+            <Text style={{ color: Theme.sub, fontWeight: "900" }}>Close</Text>
           </Pressable>
-        </Pressable>
-      </Modal>
+        </View>
 
-      {/* iOS calendar modal (bottom-sheet, aligned) */}
-      <Modal
-        visible={Platform.OS === "ios" && calendarOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setCalendarOpen(false)}
+        <View style={{ height: 10 }} />
+
+        {Platform.OS === "ios" ? (
+          <>
+            <DateTimePicker
+              value={iosCalendarDraft}
+              mode="date"
+              display="spinner"
+              onChange={(_, d) => {
+                if (d) setIosCalendarDraft(d);
+              }}
+              themeVariant="dark"
+            />
+            <View style={{ height: 10 }} />
+            <Button
+              title="Use this date"
+              onPress={() => {
+                applyPickedDate(iosCalendarDraft);
+                setCalendarOpen(false);
+              }}
+            />
+          </>
+        ) : (
+          <DateTimePicker
+            value={placedAt}
+            mode="date"
+            display="calendar"
+            onChange={(_, d) => {
+              if (d) applyPickedDate(d);
+              setCalendarOpen(false);
+            }}
+          />
+        )}
+      </SheetModal>
+
+      {/* ✅ Cap warning modal (touch-safe) */}
+      <SheetModal
+        visible={capWarningOpen}
+        onClose={() => setCapWarningOpen(false)}
+        position="center"
+        maxHeight="80%"
       >
-        <Pressable
-          onPress={() => setCalendarOpen(false)}
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.55)",
-            padding: 16,
-            justifyContent: "flex-end",
-          }}
-        >
-          <Pressable
-            onPress={() => {}}
-            style={{
-              backgroundColor: Theme.card,
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: Theme.border,
-              padding: 14,
-              maxHeight: "75%",
-            }}
-          >
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
-                Pick a date
+        <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>⚠️ Heads up</Text>
+
+        <View style={{ height: 10 }} />
+
+        <ScrollView keyboardShouldPersistTaps="always">
+          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+            {capWarning?.weeklyOver && capWarning?.monthlyOver
+              ? "You’re currently over TWO limits:"
+              : "You’re currently over one of your limits:"}
+          </Text>
+
+          <View style={{ height: 10 }} />
+
+          {capWarning?.weeklyOver ? (
+            <View style={{ gap: 4, marginBottom: 12 }}>
+              <Text style={{ color: Theme.text, fontWeight: "900" }}>Weekly wager budget exceeded</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Budget:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(capWarning.weeklyBudget ?? 0)}
+                </Text>
               </Text>
-              <Pressable onPress={() => setCalendarOpen(false)} hitSlop={10}>
-                <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
-              </Pressable>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Used:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(capWarning.weeklyUsed ?? 0)}
+                </Text>
+              </Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Over by:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(capWarning.weeklyOver ?? 0)}
+                </Text>
+              </Text>
             </View>
+          ) : null}
 
-            <View style={{ height: 10 }} />
+          {capWarning?.monthlyOver ? (
+            <View style={{ gap: 4 }}>
+              <Text style={{ color: Theme.text, fontWeight: "900" }}>Monthly loss cap exceeded</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Cap:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(capWarning.monthlyLossCap ?? 0)}
+                </Text>
+              </Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Losses this month:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(capWarning.monthlyLossUsed ?? 0)}
+                </Text>
+              </Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Over by:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(capWarning.monthlyOver ?? 0)}
+                </Text>
+              </Text>
+            </View>
+          ) : null}
 
-            <View
-              style={{
-                backgroundColor: Theme.bg,
-                borderWidth: 1,
-                borderColor: Theme.border,
-                borderRadius: 16,
-                overflow: "hidden",
+          <View style={{ height: 12 }} />
+          <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
+            Tip: If you’re logging anyway, consider lowering your stake or taking a short break.
+          </Text>
+        </ScrollView>
+
+        <View style={{ height: 14 }} />
+
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <View style={{ flex: 1 }}>
+            <Button title="Proceed" onPress={() => setCapWarningOpen(false)} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Button
+              title="View goals"
+              onPress={() => {
+                setCapWarningOpen(false);
+                router.push("/(tabs)/goals" as any);
               }}
-            >
-              <DateTimePicker
-                value={iosCalendarDraft}
-                mode="date"
-                display="inline"
-                onChange={(_event, selected) => {
-                  if (!selected) return;
-                  setIosCalendarDraft(selected);
-                }}
-              />
-            </View>
+            />
+          </View>
+        </View>
+      </SheetModal>
 
-            <View style={{ height: 12 }} />
-
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <View style={{ flex: 1 }}>
-                <Button title="Cancel" onPress={() => setCalendarOpen(false)} disabled={busy} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Button
-                  title="Apply"
-                  onPress={() => {
-                    applyPickedDate(iosCalendarDraft);
-                    setCalendarOpen(false);
-                  }}
-                  disabled={busy}
-                />
-              </View>
-            </View>
-
-            <View style={{ height: 8 }} />
-            <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
-              Past dates are saved at midday to avoid timezone edge cases.
-            </Text>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* Android native date picker */}
-      {Platform.OS === "android" && calendarOpen && (
-        <DateTimePicker
-          value={placedAt}
-          mode="date"
-          display="default"
-          onChange={(_event, selected) => {
-            setCalendarOpen(false);
-            if (!selected) return;
-            applyPickedDate(selected);
-          }}
-        />
-      )}
-
-      {/* Budget friction modal */}
-      <Modal
+      {/* ✅ Weekly budget friction modal (touch-safe) — NO emotion selector */}
+      <SheetModal
         visible={budgetModalOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setBudgetModalOpen(false)}
+        onClose={() => setBudgetModalOpen(false)}
+        position="bottom"
+        maxHeight="80%"
       >
-        <Pressable
-          onPress={() => setBudgetModalOpen(false)}
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.6)",
-            padding: 16,
-            justifyContent: "center",
-          }}
-        >
-          <Pressable
-            onPress={() => {}}
-            style={{
-              backgroundColor: Theme.card,
-              borderRadius: 18,
-              borderWidth: 1,
-              borderColor: Theme.border,
-              padding: 16,
-            }}
-          >
-            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>
-              ⚠️ You’re about to exceed your weekly budget
-            </Text>
-
-            <View style={{ height: 10 }} />
-
-            {budgetModalData ? (
-              <View style={{ gap: 6 }}>
-                <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-                  Budget:{" "}
-                  <Text style={{ color: Theme.text, fontWeight: "900" }}>
-                    {money(budgetModalData.budget)}
-                  </Text>
-                </Text>
-                <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-                  Used:{" "}
-                  <Text style={{ color: Theme.text, fontWeight: "900" }}>
-                    {money(budgetModalData.used)}
-                  </Text>
-                </Text>
-                <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-                  This bet:{" "}
-                  <Text style={{ color: Theme.text, fontWeight: "900" }}>
-                    {money(budgetModalData.thisBet)}
-                  </Text>
-                </Text>
-
-                <View style={{ height: 8 }} />
-
-                <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-                  Overage after logging:{" "}
-                  <Text style={{ color: Theme.text, fontWeight: "900" }}>
-                    {money(overage)}
-                  </Text>
-                </Text>
-              </View>
-            ) : null}
-
-            <View style={{ height: 14 }} />
-
-            <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-              What’s driving this bet right now?
-            </Text>
-
-            <View style={{ height: 10 }} />
-
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-              {EMOTIONS.slice(0, 10).map((e) => (
-                <Chip
-                  key={e.value}
-                  label={e.label}
-                  selected={budgetDriver === e.value}
-                  onPress={() => setBudgetDriver(e.value)}
-                />
-              ))}
-            </View>
-
-            <View style={{ height: 14 }} />
-
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <View style={{ flex: 1 }}>
-                <Button
-                  title="Lower stake"
-                  onPress={() => {
-                    setBudgetModalOpen(false);
-                    setTimeout(() => stakeRef.current?.focus?.(), 50);
-                  }}
-                  disabled={busy}
-                />
-              </View>
-
-              <View style={{ flex: 1 }}>
-                <Button
-                  title="Cancel"
-                  onPress={() => setBudgetModalOpen(false)}
-                  disabled={busy}
-                />
-              </View>
-            </View>
-
-            <View style={{ height: 10 }} />
-
-            <Button title="Log anyway" onPress={continueFromBudgetModal} disabled={busy} />
-
-            <View style={{ height: 6 }} />
-            <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
-              Tip: If this is a “chasing losses” moment, try lowering stake or taking a 10-minute
-              break.
-            </Text>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 10 }}>
+          <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900", flex: 1 }}>
+            ⚠️ You’re about to exceed your weekly budget
+          </Text>
+          <Pressable onPress={() => setBudgetModalOpen(false)} hitSlop={10}>
+            <Text style={{ color: Theme.sub, fontWeight: "900" }}>Close</Text>
           </Pressable>
-        </Pressable>
-      </Modal>
+        </View>
 
+        <View style={{ height: 10 }} />
+
+        <ScrollView keyboardShouldPersistTaps="always">
+          {budgetModalData ? (
+            <View style={{ gap: 6 }}>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Budget:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(budgetModalData.budget)}
+                </Text>
+              </Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Used:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(budgetModalData.used)}
+                </Text>
+              </Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                This bet:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                  {money(budgetModalData.thisBet)}
+                </Text>
+              </Text>
+
+              <View style={{ height: 8 }} />
+
+              <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                Overage after logging:{" "}
+                <Text style={{ color: Theme.text, fontWeight: "900" }}>{money(overage)}</Text>
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={{ height: 12 }} />
+
+          <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
+            Tip: Consider lowering your stake or taking a quick break.
+          </Text>
+        </ScrollView>
+
+        <View style={{ height: 14 }} />
+
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <View style={{ flex: 1 }}>
+            <Button
+              title="Lower stake"
+              onPress={() => {
+                setBudgetModalOpen(false);
+                setTimeout(() => {
+                  scrollToStakeWithOffset(true);
+                  setTimeout(() => stakeRef.current?.focus?.(), 120);
+                }, 60);
+              }}
+              disabled={busy}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Button title="Cancel" onPress={() => setBudgetModalOpen(false)} disabled={busy} />
+          </View>
+        </View>
+
+        <View style={{ height: 10 }} />
+
+        <Button title="Log anyway" onPress={continueFromBudgetModal} disabled={busy} />
+      </SheetModal>
+
+      {/* --------- Main form --------- */}
       <ScrollView
         ref={scrollRef}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ padding: 16, gap: 14 }}
+        keyboardShouldPersistTaps="always"
+        contentContainerStyle={{ padding: 16, gap: 14, paddingBottom: 40 }}
       >
         <Text style={{ color: Theme.text, fontSize: 24, fontWeight: "900" }}>Log a Bet</Text>
 
-        <SelectRow
-          label="Bet date"
-          value={placedAtLabel}
-          onPress={() => setBetDateModalOpen(true)}
-        />
+        <SelectRow label="Bet date" value={placedAtLabel} onPress={() => setBetDateModalOpen(true)} />
 
         <SelectRow
           label="Sport"
-          value={
-            sport === "Other"
-              ? sportOther.trim()
-                ? `Other: ${sportOther.trim()}`
-                : "Other"
-              : sport
-          }
+          value={sport === "Other" ? (sportOther.trim() ? `Other: ${sportOther.trim()}` : "Other") : sport}
           onPress={() => setSportOpen(true)}
         />
         {sport === "Other" && (
@@ -1009,11 +1150,7 @@ export default function LogBetScreen() {
         <SelectRow
           label="Bet Type"
           value={
-            betType === "Other"
-              ? betTypeOther.trim()
-                ? `Other: ${betTypeOther.trim()}`
-                : "Other"
-              : betType
+            betType === "Other" ? (betTypeOther.trim() ? `Other: ${betTypeOther.trim()}` : "Other") : betType
           }
           onPress={() => setBetTypeOpen(true)}
         />
@@ -1028,7 +1165,13 @@ export default function LogBetScreen() {
           />
         )}
 
-        <View style={{ gap: 6 }}>
+        {/* Stake */}
+        <View
+          style={{ gap: 6 }}
+          onLayout={(e) => {
+            stakeYRef.current = e.nativeEvent.layout.y;
+          }}
+        >
           <Text style={{ color: Theme.sub, fontWeight: "800" }}>Stake Amount</Text>
 
           <View
@@ -1053,8 +1196,9 @@ export default function LogBetScreen() {
               value={stake}
               onChangeText={(t) => setStake(t.replace(/[^0-9.]/g, ""))}
               keyboardType="numeric"
-              returnKeyType="next"
-              onSubmitEditing={() => eventRef.current?.focus?.()}
+              returnKeyType="done"
+              blurOnSubmit
+              onSubmitEditing={() => Keyboard.dismiss()}
               style={{
                 flex: 1,
                 color: Theme.text,
@@ -1078,34 +1222,54 @@ export default function LogBetScreen() {
           onSubmitEditing={() => Keyboard.dismiss()}
         />
 
+        {/* Check-in */}
         <View style={{ gap: 6 }}>
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            How are you feeling? (pick up to {EMOTION_MAX})
+          <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>What’s driving this bet?</Text>
+          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
+            Pick up to {EMOTION_MAX}. Be honest — this powers your insights.
           </Text>
           <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
-            Selected:{" "}
+            You picked:{" "}
             <Text style={{ color: Theme.text, fontWeight: "900" }}>
               {selectedEmotionLabels.length ? selectedEmotionLabels.join(", ") : "—"}
             </Text>
           </Text>
         </View>
 
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-          {EMOTIONS.map((e) => (
-            <Chip
-              key={e.value}
-              label={e.label}
-              selected={emotions.includes(e.value)}
-              onPress={() => toggleEmotion(e.value)}
-            />
-          ))}
+        <View style={{ gap: 14 }}>
+          <EmotionSection
+            title={EMOTION_GROUPS.strategic.title}
+            subtitle={EMOTION_GROUPS.strategic.subtitle}
+            items={EMOTION_GROUPS.strategic.items as any}
+            selected={emotions}
+            onToggle={toggleEmotion}
+          />
+          <EmotionSection
+            title={EMOTION_GROUPS.recreational.title}
+            subtitle={EMOTION_GROUPS.recreational.subtitle}
+            items={EMOTION_GROUPS.recreational.items as any}
+            selected={emotions}
+            onToggle={toggleEmotion}
+          />
+          <EmotionSection
+            title={EMOTION_GROUPS.situational.title}
+            subtitle={EMOTION_GROUPS.situational.subtitle}
+            items={EMOTION_GROUPS.situational.items as any}
+            selected={emotions}
+            onToggle={toggleEmotion}
+          />
+          <EmotionSection
+            title={EMOTION_GROUPS.reactive.title}
+            subtitle={EMOTION_GROUPS.reactive.subtitle}
+            items={EMOTION_GROUPS.reactive.items as any}
+            selected={emotions}
+            onToggle={toggleEmotion}
+          />
         </View>
 
-        {/* CONFIDENCE */}
+        {/* Confidence */}
         <View style={{ gap: 6 }}>
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            Confidence (1 = Very low, 5 = Very high)
-          </Text>
+          <Text style={{ color: Theme.sub, fontWeight: "800" }}>Confidence (1 = Very low, 5 = Very high)</Text>
           <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
             Current:{" "}
             <Text style={{ color: Theme.text, fontWeight: "900" }}>
@@ -1114,36 +1278,21 @@ export default function LogBetScreen() {
           </Text>
         </View>
 
-        <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+        <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
           <ConfidencePill
             label="1 · Very low"
             selected={confidence === 1}
             onPress={() => setConfidence(1)}
-            flexGrow={1.55}
+            flexGrow={2.35}
           />
-          <ConfidencePill
-            label="2"
-            selected={confidence === 2}
-            onPress={() => setConfidence(2)}
-            flexGrow={0.75}
-          />
-          <ConfidencePill
-            label="3"
-            selected={confidence === 3}
-            onPress={() => setConfidence(3)}
-            flexGrow={0.75}
-          />
-          <ConfidencePill
-            label="4"
-            selected={confidence === 4}
-            onPress={() => setConfidence(4)}
-            flexGrow={0.75}
-          />
+          <ConfidencePill label="2" selected={confidence === 2} onPress={() => setConfidence(2)} flexGrow={0.6} />
+          <ConfidencePill label="3" selected={confidence === 3} onPress={() => setConfidence(3)} flexGrow={0.6} />
+          <ConfidencePill label="4" selected={confidence === 4} onPress={() => setConfidence(4)} flexGrow={0.6} />
           <ConfidencePill
             label="5 · Very high"
             selected={confidence === 5}
             onPress={() => setConfidence(5)}
-            flexGrow={1.55}
+            flexGrow={2.35}
           />
         </View>
 
@@ -1152,3 +1301,16 @@ export default function LogBetScreen() {
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  modalWrap: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    padding: 16,
+  },
+  sheet: {
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: 16,
+  },
+});

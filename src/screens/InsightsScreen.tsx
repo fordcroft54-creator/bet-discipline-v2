@@ -1,7 +1,6 @@
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
-import { iso } from "../lib/date";
 import { supabase } from "../lib/supabase";
 import { useAppStore } from "../store/useAppStore";
 import { Theme } from "../ui/Theme";
@@ -20,24 +19,35 @@ type Bet = {
   settled_at: string | null;
 
   created_at?: string | null;
-  placed_at?: string | null; // ✅ NEW: actual bet date
+  placed_at?: string | null; // ✅ actual bet date
 };
 
+// ✅ Updated to match your NEW LogBet emotions (from your BetsScreen)
 const EMOTION_LABEL_BY_VALUE: Record<string, string> = {
+  // Strategic
+  confident: "🎉 Confident",
+  research: "🧠 Research-based",
+  system: "📊 System play",
+  pre_planned: "🗓️ Pre-planned",
+
+  // Recreational
+  fun: "🙂 Just for fun",
+  social: "👯 Social / with friends",
+  habit: "🔁 Habit / routine",
+
+  // Situational
   bored: "😐 Bored",
-  chasing_losses: "😤 Chasing losses",
-  tilted: "😡 Tilted / frustrated",
+  fomo: "😬 FOMO",
+  impulsive: "⚡ Impulsive",
   stressed: "😰 Stressed",
   drinking: "🍺 Drinking",
-  impulsive: "⚡ Impulsive",
 
-  habit: "🔁 Habit / routine",
-  social: "👯 Social / with friends",
-  confident: "🎉 Confident",
-  fun: "🙂 Just for fun",
-
-  pre_planned: "🧠 Pre-planned",
-  within_budget: "💸 Within budget",
+  // Reactive
+  chasing_losses: "😤 Chasing losses",
+  tilted: "😡 Tilted / frustrated",
+  revenge: "💢 Revenge bet",
+  doubling_down: "🔁 Doubling down",
+  desperate: "😵‍💫 Desperate",
 };
 
 function fmtMoney(n: number) {
@@ -243,34 +253,62 @@ function betDateIso(b: Bet) {
   return b.placed_at ?? b.created_at ?? null;
 }
 
-/** ✅ Risk mix fix:
- * Your example (confident + within_budget) was showing "mid" because MID included "confident"
- * and the old logic sets mid first, and low only if still unknown.
- *
- * New rule:
- * - If ANY high-risk emotion -> high
- * - Else if ANY low-risk emotion -> low  (even if confident/habit/social/etc also selected)
- * - Else if any mid -> mid
- * - Else unknown
+/** ===================== RISK SCORING (NEW) =====================
+ * Option A: single bet risk score = MAX of selected emotions
+ * Scores are based on your emotion GROUPS:
+ * Strategic=0, Recreational=1, Situational=2, Reactive=3
  */
-function classifyRiskFromEmotions(vals: string[]) {
-  const HIGH = new Set<string>([
-    "chasing_losses",
-    "tilted",
-    "stressed",
-    "drinking",
-    "impulsive",
-    "bored",
-  ]);
-  const MID = new Set<string>(["habit", "social", "confident", "fun"]);
-  const LOW = new Set<string>(["pre_planned", "within_budget"]);
+const EMOTION_RISK_SCORE: Record<string, number> = {
+  // Strategic (0)
+  confident: 0,
+  research: 0,
+  system: 0,
+  pre_planned: 0,
 
-  const keys = vals.map((v) => tidy(v)).filter(Boolean);
+  // Recreational (1)
+  fun: 1,
+  social: 1,
+  habit: 1,
 
-  if (keys.some((k) => HIGH.has(k))) return "high" as const;
-  if (keys.some((k) => LOW.has(k))) return "low" as const;
-  if (keys.some((k) => MID.has(k))) return "mid" as const;
-  return "unknown" as const;
+  // Situational (2)
+  bored: 2,
+  fomo: 2,
+  impulsive: 2,
+  stressed: 2,
+  drinking: 2,
+
+  // Reactive (3)
+  chasing_losses: 3,
+  tilted: 3,
+  revenge: 3,
+  doubling_down: 3,
+  desperate: 3,
+};
+
+type RiskLevel = "low" | "mid" | "high";
+
+function riskScoreForBet(emotions?: string[] | null, emotion?: string | null) {
+  const list =
+    emotions?.length ? emotions :
+    emotion ? [emotion] :
+    [];
+
+  if (!list.length) return 0;
+
+  let max = 0;
+  for (const e of list) {
+    const key = tidy(e);
+    if (!key) continue;
+    const s = EMOTION_RISK_SCORE[key] ?? 0;
+    if (s > max) max = s;
+  }
+  return max; // 0..3
+}
+
+function riskLevelFromScore(score: number): RiskLevel {
+  if (score >= 3) return "high";
+  if (score >= 2) return "mid";
+  return "low";
 }
 
 export default function InsightsScreen() {
@@ -332,27 +370,24 @@ export default function InsightsScreen() {
       const start = startForRange(range);
 
       // ✅ pull placed_at as well
-      let q = supabase
+      const q = supabase
         .from("bets")
         .select(
           "stake,emotion,emotions,confidence,sport,bet_type,status,result,profit,settled_at,created_at,placed_at"
         )
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .order("placed_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false });
 
-      // ✅ filter by placed_at (fallback handling below)
-      // Note: for older rows with placed_at NULL, Supabase can't include them with gte(placed_at).
-      // We handle that by:
-      //  - fetching the range using placed_at when possible
-      //  - AND still allowing older null-placed_at rows by fetching them and filtering locally (small datasets).
-      //
-      // For simplicity + correctness, we do a single fetch (all) when range != all,
-      // then filter locally using betDateIso. Most apps at your size won't be huge.
       let rows: Bet[] = [];
 
+      // We local-filter by betDateIso so older rows with placed_at NULL behave correctly.
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const allRows = ((data as any) ?? []) as Bet[];
+
       if (start) {
-        const { data, error } = await q.order("placed_at", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false });
-        if (error) throw error;
-        const allRows = ((data as any) ?? []) as Bet[];
         rows = allRows.filter((b) => {
           const dIso = betDateIso(b);
           if (!dIso) return false;
@@ -360,11 +395,7 @@ export default function InsightsScreen() {
           return Number.isFinite(d.getTime()) && d >= start;
         });
       } else {
-        const { data, error } = await q
-          .order("placed_at", { ascending: false, nullsFirst: false })
-          .order("created_at", { ascending: false });
-        if (error) throw error;
-        rows = ((data as any) ?? []) as Bet[];
+        rows = allRows;
       }
 
       setBets(rows);
@@ -380,20 +411,7 @@ export default function InsightsScreen() {
         const prevStart = new Date(start);
         prevStart.setDate(prevStart.getDate() - days);
 
-        // ✅ same approach: fetch then local filter so placed_at NULL rows behave consistently
-        const { data: prevData, error: prevErr } = await supabase
-          .from("bets")
-          .select(
-            "stake,emotion,emotions,confidence,sport,bet_type,status,result,profit,settled_at,created_at,placed_at"
-          )
-          .eq("user_id", user.id)
-          .order("placed_at", { ascending: false, nullsFirst: false })
-          .order("created_at", { ascending: false });
-
-        if (prevErr) throw prevErr;
-
-        const prevAll = ((prevData as any) ?? []) as Bet[];
-        const prevRows = prevAll.filter((b) => {
+        const prevRows = allRows.filter((b) => {
           const dIso = betDateIso(b);
           if (!dIso) return false;
           const d = new Date(dIso);
@@ -452,6 +470,7 @@ export default function InsightsScreen() {
     const avgStake = total > 0 ? totalStakedSettled / total : 0;
     const roi = totalStakedSettled > 0 ? net / totalStakedSettled : 0;
 
+    // top emotion (across ALL bets in range)
     const emoCounts: Record<string, number> = {};
     for (const b of bets) {
       const raw: string[] =
@@ -510,36 +529,68 @@ export default function InsightsScreen() {
     return { canCompare: true as const, netDeltaPct, winDeltaPts };
   }, [overall.net, overall.winRate, prevNet, prevWinRate, prevHasSettled]);
 
-  const riskMix = useMemo(() => {
-    let high = 0;
-    let mid = 0;
+  /** ===================== RISK MIX (NEW) =====================
+   * - riskScore per bet = MAX emotion score (0..3)
+   * - bucketed low/mid/high
+   * - also calculates avg risk score KPI
+   * - and performance by risk level (settled bets)
+   */
+  const risk = useMemo(() => {
+    // Mix across ALL bets (in range)
     let low = 0;
+    let mid = 0;
+    let high = 0;
+
+    let sumScore = 0;
+
+    // performance by risk (settled only)
+    const perf: Record<RiskLevel, { n: number; wins: number; stakeSum: number; net: number }> = {
+      low: { n: 0, wins: 0, stakeSum: 0, net: 0 },
+      mid: { n: 0, wins: 0, stakeSum: 0, net: 0 },
+      high: { n: 0, wins: 0, stakeSum: 0, net: 0 },
+    };
 
     for (const b of bets) {
-      const raw: string[] =
-        b.emotions && b.emotions.length
-          ? (b.emotions as any)
-          : b.emotion
-          ? ([b.emotion] as any)
-          : [];
-      const keys = raw.length ? raw : ["unknown"];
+      const score = riskScoreForBet(b.emotions ?? null, b.emotion ?? null);
+      sumScore += score;
 
-      const level = classifyRiskFromEmotions(keys);
-      if (level === "high") high += 1;
-      else if (level === "low") low += 1;
+      const level = riskLevelFromScore(score);
+      if (level === "low") low += 1;
       else if (level === "mid") mid += 1;
+      else high += 1;
+
+      if (b.status === "settled" && b.result !== null) {
+        perf[level].n += 1;
+        perf[level].wins += b.result === "win" ? 1 : 0;
+        perf[level].stakeSum += Number(b.stake ?? 0);
+        perf[level].net += normalizedProfit(b);
+      }
     }
 
     const total = bets.length || 1;
-    return {
-      high,
-      mid,
-      low,
-      highPct: high / total,
-      midPct: mid / total,
-      lowPct: low / total,
+    const avgScore = bets.length ? sumScore / bets.length : 0; // 0..3
+
+    const toRow = (level: RiskLevel) => {
+      const p = perf[level];
+      const winRate = p.n ? p.wins / p.n : 0;
+      const roi = p.stakeSum > 0 ? p.net / p.stakeSum : 0;
+      const avgStake = p.n ? p.stakeSum / p.n : 0;
+      return { level, ...p, winRate, roi, avgStake };
     };
-  }, [bets]);
+
+    return {
+      mix: {
+        low,
+        mid,
+        high,
+        lowPct: low / total,
+        midPct: mid / total,
+        highPct: high / total,
+      },
+      avgScore,
+      perfRows: [toRow("high"), toRow("mid"), toRow("low")], // show riskiest first
+    };
+  }, [bets, normalizedProfit]);
 
   const betTypeRows = useMemo(() => {
     const map: Record<string, { total: number; wins: number; net: number; stakeSum: number }> = {};
@@ -701,6 +752,15 @@ export default function InsightsScreen() {
         } ${Math.round(Math.abs((deltas.winDeltaPts ?? 0) * 100))} pts`
       : null;
 
+  // Risk score label for KPI
+  const avgRiskLabel = (() => {
+    const x = risk.avgScore;
+    if (x >= 2.6) return "High";
+    if (x >= 1.6) return "Mixed";
+    if (x >= 0.8) return "Low";
+    return "Very low";
+  })();
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg }}>
       <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }}>
@@ -754,7 +814,11 @@ export default function InsightsScreen() {
           {hasSettled ? (
             <>
               <Text style={{ color: Theme.sub, fontWeight: "800" }}>Win rate</Text>
-              <Bar value={overall.winRate} labelLeft={`${overall.wins} wins`} labelRight={`${overall.losses} losses`} />
+              <Bar
+                value={overall.winRate}
+                labelLeft={`${overall.wins} wins`}
+                labelRight={`${overall.losses} losses`}
+              />
               <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                 <Text style={{ color: Theme.sub, fontWeight: "700" }}>
                   Settled: <Text style={{ color: Theme.text, fontWeight: "900" }}>{overall.total}</Text>
@@ -782,7 +846,9 @@ export default function InsightsScreen() {
           {!hasSettled ? (
             <Text style={{ color: Theme.sub, fontWeight: "700" }}>No settled bets yet.</Text>
           ) : confidenceRows.length === 0 ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>No settled bets with confidence saved yet.</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+              No settled bets with confidence saved yet.
+            </Text>
           ) : (
             <View style={{ gap: 12 }}>
               {confidenceRows.map((r) => (
@@ -802,9 +868,9 @@ export default function InsightsScreen() {
 
                   <Bar
                     value={r.winRate}
-                    labelLeft={`Win ${pct(r.winRate)} (${r.wins}W${r.losses ? `–${r.losses}L` : ""}${
-                      r.pushes ? `–${r.pushes}P` : ""
-                    })`}
+                    labelLeft={`Win ${pct(r.winRate)} (${r.wins}W${
+                      r.losses ? `–${r.losses}L` : ""
+                    }${r.pushes ? `–${r.pushes}P` : ""})`}
                     labelRight={`Avg ${fmtMoney(r.avgStake)}`}
                   />
 
@@ -822,25 +888,105 @@ export default function InsightsScreen() {
           )}
         </Section>
 
+        {/* ===================== RISK MIX (UPDATED) ===================== */}
         <Section title="Risk mix">
           <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            Based on your selected emotions (if you pick any controlled vibe, it counts as 🟢 unless a 🔴 is present)
+            Built from your emotion groups (Strategic=0, Recreational=1, Situational=2, Reactive=3). Each bet’s risk score
+            is the max of its selected emotions.
           </Text>
+
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+            <StatCard
+              label="Avg risk score"
+              value={`${risk.avgScore.toFixed(2)} / 3`}
+              sub={avgRiskLabel}
+            />
+            <StatCard
+              label="High-risk bets"
+              value={pct(risk.mix.highPct)}
+              sub={`${risk.mix.high} of ${bets.length}`}
+            />
+            <StatCard
+              label="Mid-risk bets"
+              value={pct(risk.mix.midPct)}
+              sub={`${risk.mix.mid} of ${bets.length}`}
+            />
+            <StatCard
+              label="Low-risk bets"
+              value={pct(risk.mix.lowPct)}
+              sub={`${risk.mix.low} of ${bets.length}`}
+            />
+          </View>
 
           <View style={{ gap: 10 }}>
             <View style={{ gap: 6 }}>
-              <Text style={{ color: Theme.text, fontWeight: "900" }}>🔴 High-risk vibes: {pct(riskMix.highPct)}</Text>
-              <Bar value={riskMix.highPct} />
+              <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                🔴 High: {pct(risk.mix.highPct)}
+              </Text>
+              <Bar value={risk.mix.highPct} />
             </View>
             <View style={{ gap: 6 }}>
-              <Text style={{ color: Theme.text, fontWeight: "900" }}>🟡 Neutral/mixed: {pct(riskMix.midPct)}</Text>
-              <Bar value={riskMix.midPct} />
+              <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                🟡 Mid: {pct(risk.mix.midPct)}
+              </Text>
+              <Bar value={risk.mix.midPct} />
             </View>
             <View style={{ gap: 6 }}>
-              <Text style={{ color: Theme.text, fontWeight: "900" }}>🟢 Controlled: {pct(riskMix.lowPct)}</Text>
-              <Bar value={riskMix.lowPct} />
+              <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                🟢 Low: {pct(risk.mix.lowPct)}
+              </Text>
+              <Bar value={risk.mix.lowPct} />
             </View>
           </View>
+
+          <View style={{ height: 6 }} />
+
+          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+            Performance by risk level (settled bets)
+          </Text>
+
+          {!hasSettled ? (
+            <Text style={{ color: Theme.sub, fontWeight: "700" }}>No settled bets yet.</Text>
+          ) : (
+            <View style={{ gap: 12 }}>
+              {risk.perfRows.map((r) => {
+                const title =
+                  r.level === "high" ? "🔴 High risk" : r.level === "mid" ? "🟡 Mid risk" : "🟢 Low risk";
+
+                return (
+                  <View
+                    key={r.level}
+                    style={{
+                      paddingTop: 10,
+                      borderTopWidth: 1,
+                      borderTopColor: Theme.border,
+                      gap: 8,
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                      <Text style={{ color: Theme.text, fontWeight: "900" }}>{title}</Text>
+                      <Text style={{ color: Theme.sub, fontWeight: "800" }}>n={r.n}</Text>
+                    </View>
+
+                    <Bar
+                      value={r.winRate}
+                      labelLeft={`Win ${pct(r.winRate)} (${r.wins}W)`}
+                      labelRight={`Avg ${fmtMoney(r.avgStake)}`}
+                    />
+
+                    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                      <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+                        Net: <Text style={{ color: Theme.text, fontWeight: "900" }}>{fmtMoney(r.net)}</Text>
+                      </Text>
+                      <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+                        ROI: <Text style={{ color: Theme.text, fontWeight: "900" }}>{pct(r.roi)}</Text>
+                      </Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          )}
         </Section>
 
         <Section title="By bet type (top)">
@@ -866,7 +1012,11 @@ export default function InsightsScreen() {
                     <Text style={{ color: Theme.sub, fontWeight: "800" }}>n={r.total}</Text>
                   </View>
 
-                  <Bar value={r.winRate} labelLeft={`Win ${pct(r.winRate)}`} labelRight={`Avg ${fmtMoney(r.avgStake)}`} />
+                  <Bar
+                    value={r.winRate}
+                    labelLeft={`Win ${pct(r.winRate)}`}
+                    labelRight={`Avg ${fmtMoney(r.avgStake)}`}
+                  />
 
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                     <Text style={{ color: Theme.sub, fontWeight: "700" }}>
@@ -905,7 +1055,11 @@ export default function InsightsScreen() {
                     <Text style={{ color: Theme.sub, fontWeight: "800" }}>n={r.total}</Text>
                   </View>
 
-                  <Bar value={r.winRate} labelLeft={`Win ${pct(r.winRate)}`} labelRight={`Avg ${fmtMoney(r.avgStake)}`} />
+                  <Bar
+                    value={r.winRate}
+                    labelLeft={`Win ${pct(r.winRate)}`}
+                    labelRight={`Avg ${fmtMoney(r.avgStake)}`}
+                  />
 
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                     <Text style={{ color: Theme.sub, fontWeight: "700" }}>

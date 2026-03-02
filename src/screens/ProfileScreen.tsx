@@ -7,12 +7,12 @@ import {
   SafeAreaView,
   ScrollView,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { supabase } from "../lib/supabase";
 import { useAppStore } from "../store/useAppStore";
 import { Button } from "../ui/Button";
-import { Field } from "../ui/Field";
 import { Theme } from "../ui/Theme";
 
 function digitsAndDot(s: string) {
@@ -30,6 +30,114 @@ function formatCurrencyForDisplay(raw: string) {
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
+function CurrencyField({
+  label,
+  valueRaw,
+  onChangeRaw,
+  placeholder = "0",
+}: {
+  label: string;
+  valueRaw: string;
+  onChangeRaw: (raw: string) => void;
+  placeholder?: string;
+}) {
+  const display = useMemo(() => formatCurrencyForDisplay(valueRaw), [valueRaw]);
+
+  return (
+    <View style={{ gap: 6 }}>
+      <Text style={{ color: Theme.sub, fontWeight: "800" }}>{label}</Text>
+
+      <View
+        style={{
+          backgroundColor: Theme.card,
+          borderWidth: 1,
+          borderColor: Theme.border,
+          borderRadius: 14,
+          paddingHorizontal: 12,
+          paddingVertical: 10,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>$</Text>
+
+        <TextInput
+          value={digitsAndDot(display.replace("$", ""))} // keep just numeric while showing $ prefix via the label
+          onChangeText={(t) => onChangeRaw(digitsAndDot(t))}
+          keyboardType="decimal-pad"
+          returnKeyType="done"
+          blurOnSubmit
+          onSubmitEditing={() => Keyboard.dismiss()}
+          placeholder={placeholder}
+          placeholderTextColor={Theme.sub}
+          selectionColor={Theme.text}
+          style={{
+            flex: 1,
+            color: Theme.text,
+            fontSize: 16,
+            fontWeight: "800",
+            padding: 0,
+            margin: 0,
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+function NumberField({
+  label,
+  valueRaw,
+  onChangeRaw,
+  placeholder = "0",
+}: {
+  label: string;
+  valueRaw: string;
+  onChangeRaw: (raw: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <View style={{ gap: 6 }}>
+      <Text style={{ color: Theme.sub, fontWeight: "800" }}>{label}</Text>
+
+      <View
+        style={{
+          backgroundColor: Theme.card,
+          borderWidth: 1,
+          borderColor: Theme.border,
+          borderRadius: 14,
+          paddingHorizontal: 12,
+          paddingVertical: 10,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <TextInput
+          value={valueRaw}
+          onChangeText={(t) => onChangeRaw(digitsAndDot(t))}
+          keyboardType="number-pad"
+          returnKeyType="done"
+          blurOnSubmit
+          onSubmitEditing={() => Keyboard.dismiss()}
+          placeholder={placeholder}
+          placeholderTextColor={Theme.sub}
+          selectionColor={Theme.text}
+          style={{
+            flex: 1,
+            color: Theme.text,
+            fontSize: 16,
+            fontWeight: "800",
+            padding: 0,
+            margin: 0,
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
 export default function ProfileScreen() {
   const bump = useAppStore((s) => s.bump);
 
@@ -39,7 +147,6 @@ export default function ProfileScreen() {
   const [weeklyBudget, setWeeklyBudget] = useState("500");
   const [monthlyLossCap, setMonthlyLossCap] = useState("800");
   const [daysPerWeek, setDaysPerWeek] = useState("3");
-  const [lockDaysOnCap, setLockDaysOnCap] = useState("7");
 
   const [busy, setBusy] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -48,16 +155,6 @@ export default function ProfileScreen() {
   const userIdRef = useRef<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
-
-  const maxBetDisplay = useMemo(() => formatCurrencyForDisplay(maxBet), [maxBet]);
-  const weeklyBudgetDisplay = useMemo(
-    () => formatCurrencyForDisplay(weeklyBudget),
-    [weeklyBudget]
-  );
-  const monthlyLossCapDisplay = useMemo(
-    () => formatCurrencyForDisplay(monthlyLossCap),
-    [monthlyLossCap]
-  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -73,11 +170,7 @@ export default function ProfileScreen() {
         userIdRef.current = user?.id ?? null;
         if (!user) return;
 
-        const g = await supabase
-          .from("goals")
-          .select("*")
-          .eq("user_id", user.id)
-          .maybeSingle();
+        const g = await supabase.from("goals").select("*").eq("user_id", user.id).maybeSingle();
 
         if (!mountedRef.current) return;
 
@@ -88,7 +181,6 @@ export default function ProfileScreen() {
           setWeeklyBudget(String(g.data.weekly_budget ?? 0));
           setMonthlyLossCap(String(g.data.monthly_loss_cap ?? 0));
           setDaysPerWeek(String(g.data.days_per_week ?? 0));
-          setLockDaysOnCap(String(g.data.lock_days_on_cap ?? 0));
         }
       } catch (e: any) {
         setSaveStatus("error");
@@ -108,7 +200,6 @@ export default function ProfileScreen() {
     weekly_budget: Number(digitsAndDot(weeklyBudget)) || 0,
     monthly_loss_cap: Number(digitsAndDot(monthlyLossCap)) || 0,
     days_per_week: Number(digitsAndDot(daysPerWeek)) || 0,
-    lock_days_on_cap: Number(digitsAndDot(lockDaysOnCap)) || 0,
   });
 
   const doSave = async () => {
@@ -125,10 +216,7 @@ export default function ProfileScreen() {
     try {
       const payload = buildPayload(userId);
 
-      const { error } = await supabase
-        .from("goals")
-        .upsert(payload, { onConflict: "user_id" });
-
+      const { error } = await supabase.from("goals").upsert(payload, { onConflict: "user_id" });
       if (error) throw error;
 
       bump();
@@ -164,13 +252,12 @@ export default function ProfileScreen() {
     if (!userIdRef.current) return;
     scheduleAutosave();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maxBet, weeklyBudget, monthlyLossCap, daysPerWeek, lockDaysOnCap]);
+  }, [maxBet, weeklyBudget, monthlyLossCap, daysPerWeek]);
 
   const statusText = useMemo(() => {
     if (saveStatus === "saving") return "Saving…";
     if (saveStatus === "saved") return "Saved";
-    if (saveStatus === "error")
-      return saveErrorMsg ? `Couldn’t save: ${saveErrorMsg}` : "Couldn’t save";
+    if (saveStatus === "error") return saveErrorMsg ? `Couldn’t save: ${saveErrorMsg}` : "Couldn’t save";
     return "";
   }, [saveStatus, saveErrorMsg]);
 
@@ -205,27 +292,11 @@ export default function ProfileScreen() {
             gap: 14,
           }}
         >
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "baseline",
-              justifyContent: "space-between",
-            }}
-          >
-            <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>
-              Goals
-            </Text>
+          <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between" }}>
+            <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>Goals</Text>
 
             {!!statusText && (
-              <Text
-                style={{
-                  color: saveStatus === "error" ? Theme.sub : Theme.sub,
-                  fontWeight: "800",
-                  fontSize: 12,
-                }}
-              >
-                {statusText}
-              </Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{statusText}</Text>
             )}
           </View>
 
@@ -239,58 +310,32 @@ export default function ProfileScreen() {
               gap: 12,
             }}
           >
-            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>
-              Limits
-            </Text>
+            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>Limits</Text>
 
-            <Field
-              label="Max Bet Size"
-              value={maxBetDisplay}
-              onChangeText={(t) => setMaxBet(digitsAndDot(t))}
-              keyboardType="decimal-pad"
-              returnKeyType="done"
-              onSubmitEditing={() => Keyboard.dismiss()}
-            />
+            <CurrencyField label="Max Bet Size" valueRaw={maxBet} onChangeRaw={setMaxBet} placeholder="150" />
 
-            <Field
+            <CurrencyField
               label="Weekly Wager Budget"
-              value={weeklyBudgetDisplay}
-              onChangeText={(t) => setWeeklyBudget(digitsAndDot(t))}
-              keyboardType="decimal-pad"
-              returnKeyType="done"
-              onSubmitEditing={() => Keyboard.dismiss()}
+              valueRaw={weeklyBudget}
+              onChangeRaw={setWeeklyBudget}
+              placeholder="500"
             />
 
-            <Field
+            <CurrencyField
               label="Monthly Loss Cap"
-              value={monthlyLossCapDisplay}
-              onChangeText={(t) => setMonthlyLossCap(digitsAndDot(t))}
-              keyboardType="decimal-pad"
-              returnKeyType="done"
-              onSubmitEditing={() => Keyboard.dismiss()}
+              valueRaw={monthlyLossCap}
+              onChangeRaw={setMonthlyLossCap}
+              placeholder="800"
             />
 
-            <Field
+            <NumberField
               label="Betting Days / Week"
-              value={daysPerWeek}
-              onChangeText={(t) => setDaysPerWeek(digitsAndDot(t))}
-              keyboardType="number-pad"
-              returnKeyType="done"
-              onSubmitEditing={() => Keyboard.dismiss()}
+              valueRaw={daysPerWeek}
+              onChangeRaw={setDaysPerWeek}
+              placeholder="3"
             />
 
-            <Field
-              label="Lock # Of Days If Cap Hit"
-              value={lockDaysOnCap}
-              onChangeText={(t) => setLockDaysOnCap(digitsAndDot(t))}
-              keyboardType="number-pad"
-              returnKeyType="done"
-              onSubmitEditing={() => Keyboard.dismiss()}
-            />
-
-            {saveStatus === "error" && (
-              <Button title="Retry" onPress={doSave} disabled={retryDisabled} />
-            )}
+            {saveStatus === "error" && <Button title="Retry" onPress={doSave} disabled={retryDisabled} />}
           </View>
 
           <View style={{ height: 6 }} />
@@ -305,9 +350,7 @@ export default function ProfileScreen() {
               gap: 10,
             }}
           >
-            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>
-              Profile
-            </Text>
+            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>Profile</Text>
 
             <Text style={{ color: Theme.sub, fontWeight: "700" }}>Signed in as</Text>
             <Text style={{ color: Theme.text, fontWeight: "900" }}>{email}</Text>
