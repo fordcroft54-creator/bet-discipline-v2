@@ -383,9 +383,17 @@ export default function BetsScreen() {
   const renderItem = ({ item }: { item: Bet }) => {
     const isSettled = (item.status ?? "").toLowerCase() === "settled";
 
-    const sportLabel = tidy(item.sport) || "Sport";
-    const betTypeLabel = tidy(item.bet_type) || "Bet";
-    const header = `${sportLabel} • ${betTypeLabel}`;
+    const sportLabel = tidy(item.sport);
+const betTypeLabel = tidy(item.bet_type);
+
+const header =
+  sportLabel && betTypeLabel
+    ? `${sportLabel} • ${betTypeLabel}`
+    : sportLabel
+    ? sportLabel
+    : betTypeLabel
+    ? betTypeLabel
+    : "Uncategorized";
 
     const event = tidy(item.event_label);
     const stake = Number(item.stake ?? 0);

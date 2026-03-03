@@ -152,22 +152,24 @@ const EMOTION_RISK_SCORE: Record<string, number> = {
   desperate: 3,
 };
 
-type RiskLevel = "low" | "mid" | "high";
+type RiskLevel = "low" | "mid" | "high" | "unknown";
 
 function riskScoreForBet(emotions?: string[] | null, emotion?: string | null) {
   const list = emotions?.length ? emotions : emotion ? [emotion] : [];
-  if (!list.length) return 0;
+  const cleaned = list.map((x) => tidy(x)).filter(Boolean);
+
+  if (!cleaned.length) return { score: 0, hasEmotion: false };
+
   let max = 0;
-  for (const e of list) {
-    const key = tidy(e);
-    if (!key) continue;
+  for (const key of cleaned) {
     const s = EMOTION_RISK_SCORE[key] ?? 0;
     if (s > max) max = s;
   }
-  return max;
+  return { score: max, hasEmotion: true };
 }
 
-function riskLevelFromScore(score: number): RiskLevel {
+function riskLevelFromScore(score: number, hasEmotion: boolean): RiskLevel {
+  if (!hasEmotion) return "unknown";
   if (score >= 3) return "high";
   if (score >= 2) return "mid";
   return "low";
@@ -409,7 +411,7 @@ function DonutRing({ highPct, midPct, lowPct }: { highPct: number; midPct: numbe
   const mLen = C * m;
   const lLen = C * l;
 
-  const levels: { key: RiskLevel; pct: number; label: string }[] = [
+  const levels: { key: Exclude<RiskLevel, "unknown">; pct: number; label: string }[] = [
     { key: "low", pct: l, label: "Low" },
     { key: "mid", pct: m, label: "Mid" },
     { key: "high", pct: h, label: "High" },
@@ -518,7 +520,7 @@ export default function InsightsScreen() {
   const [openBetType, setOpenBetType] = useState(false);
   const [openSport, setOpenSport] = useState(false);
 
-  // ✅ NEW: collapsible breakdowns *inside* the core cards
+  // collapsible breakdowns inside the core cards
   const [openRiskBreakdown, setOpenRiskBreakdown] = useState(false);
   const [openConfidenceBreakdown, setOpenConfidenceBreakdown] = useState(false);
 
@@ -690,22 +692,25 @@ export default function InsightsScreen() {
     let low = 0;
     let mid = 0;
     let high = 0;
+    let unknown = 0;
 
-    const perf: Record<RiskLevel, { n: number; wins: number; stakeSum: number; net: number }> = {
+    // only track perf for classified buckets (low/mid/high)
+    const perf: Record<Exclude<RiskLevel, "unknown">, { n: number; wins: number; stakeSum: number; net: number }> = {
       low: { n: 0, wins: 0, stakeSum: 0, net: 0 },
       mid: { n: 0, wins: 0, stakeSum: 0, net: 0 },
       high: { n: 0, wins: 0, stakeSum: 0, net: 0 },
     };
 
     for (const b of bets) {
-      const score = riskScoreForBet(b.emotions ?? null, b.emotion ?? null);
-      const lvl = riskLevelFromScore(score);
+      const { score, hasEmotion } = riskScoreForBet(b.emotions ?? null, b.emotion ?? null);
+      const lvl = riskLevelFromScore(score, hasEmotion);
 
       if (lvl === "low") low += 1;
       else if (lvl === "mid") mid += 1;
-      else high += 1;
+      else if (lvl === "high") high += 1;
+      else unknown += 1;
 
-      if (b.status === "settled" && b.result !== null) {
+      if (lvl !== "unknown" && b.status === "settled" && b.result !== null) {
         perf[lvl].n += 1;
         perf[lvl].wins += b.result === "win" ? 1 : 0;
         perf[lvl].stakeSum += Number(b.stake ?? 0);
@@ -713,17 +718,29 @@ export default function InsightsScreen() {
       }
     }
 
-    const total = bets.length || 1;
-    const lowPct = low / total;
-    const midPct = mid / total;
-    const highPct = high / total;
+    // donut/mix should reflect only classified bets, not missing emotions
+    const classifiedTotal = low + mid + high;
+    const denom = classifiedTotal || 1;
 
-    let profileLine = "Mostly strategic betting.";
-    if (highPct >= 0.35) profileLine = "High-risk betting is elevated.";
-    else if (midPct >= 0.35) profileLine = "You’re mixing in a lot of situational bets.";
-    else if (lowPct >= 0.75) profileLine = "You’re keeping risk low — solid discipline.";
+    const lowPct = low / denom;
+    const midPct = mid / denom;
+    const highPct = high / denom;
 
-    const toRow = (level: RiskLevel) => {
+    // unknown shown separately (out of all bets)
+    const unknownPct = bets.length ? unknown / bets.length : 0;
+
+    let profileLine = "Log emotions to build your risk profile.";
+    if (classifiedTotal >= 5) {
+      profileLine = "Mostly strategic betting.";
+      if (highPct >= 0.35) profileLine = "High-risk betting is elevated.";
+      else if (midPct >= 0.35) profileLine = "You’re mixing in a lot of situational bets.";
+      else if (lowPct >= 0.75) profileLine = "You’re keeping risk low — solid discipline.";
+    }
+    if (unknownPct >= 0.35) {
+      profileLine = "Risk profile is incomplete — many bets have no emotions logged.";
+    }
+
+    const toRow = (level: Exclude<RiskLevel, "unknown">) => {
       const p = perf[level];
       const winRate = p.n ? p.wins / p.n : 0;
       const roi = p.stakeSum > 0 ? p.net / p.stakeSum : 0;
@@ -736,7 +753,7 @@ export default function InsightsScreen() {
     const bestByNet = [...rows].sort((a, b) => b.net - a.net)[0];
     const worstByNet = [...rows].sort((a, b) => a.net - b.net)[0];
 
-    const name = (lvl: RiskLevel) => (lvl === "high" ? "high-risk" : lvl === "mid" ? "mid-risk" : "low-risk");
+    const name = (lvl: Exclude<RiskLevel, "unknown">) => (lvl === "high" ? "high-risk" : lvl === "mid" ? "mid-risk" : "low-risk");
 
     let perfSummary = "Settle bets to see how risk level performs.";
     const totalSettledByRisk = rows.reduce((s, r) => s + r.n, 0);
@@ -747,14 +764,15 @@ export default function InsightsScreen() {
         const r = bucketsWithData[0];
         perfSummary = `So far, all settled bets are ${name(r.level)}: ${pct(r.winRate)} win rate and ${fmtMoney(r.net, 0)} net.`;
       } else {
-        perfSummary = `Best so far: ${name(bestByNet.level)} (${pct(bestByNet.winRate)} win, ${fmtMoney(bestByNet.net, 0)} net). Weakest: ${name(
-          worstByNet.level
-        )} (${pct(worstByNet.winRate)} win, ${fmtMoney(worstByNet.net, 0)} net).`;
+        perfSummary = `Best so far: ${name(bestByNet.level)} (${pct(bestByNet.winRate)} win, ${fmtMoney(
+          bestByNet.net,
+          0
+        )} net). Weakest: ${name(worstByNet.level)} (${pct(worstByNet.winRate)} win, ${fmtMoney(worstByNet.net, 0)} net).`;
       }
     }
 
     return {
-      mix: { low, mid, high, lowPct, midPct, highPct },
+      mix: { low, mid, high, unknown, lowPct, midPct, highPct, unknownPct, classifiedTotal },
       profileLine,
       perfRows: rows,
       perfSummary,
@@ -776,14 +794,12 @@ export default function InsightsScreen() {
     };
 
     const confs: number[] = [];
-    const settledWithConf: Bet[] = [];
 
     for (const b of settled) {
       const raw = Number(b.confidence ?? 0);
       if (!Number.isFinite(raw) || raw <= 0) continue;
       const k = Math.max(1, Math.min(5, Math.round(raw)));
       confs.push(k);
-      settledWithConf.push(b);
       add(k, b);
     }
 
@@ -855,9 +871,10 @@ export default function InsightsScreen() {
           ? `Surprise: low-confidence (1–2) is beating high-confidence.`
           : `High confidence is trending better than low confidence.`;
 
-      story = `High (4–5): ${pct(hi.winRate)} win • ROI ${pct(hi.roi)} • Net ${fmtMoney(hi.net, 0)}. Low (1–2): ${pct(lo.winRate)} win • ROI ${pct(
-        lo.roi
-      )} • Net ${fmtMoney(lo.net, 0)}.`;
+      story = `High (4–5): ${pct(hi.winRate)} win • ROI ${pct(hi.roi)} • Net ${fmtMoney(
+        hi.net,
+        0
+      )}. Low (1–2): ${pct(lo.winRate)} win • ROI ${pct(lo.roi)} • Net ${fmtMoney(lo.net, 0)}.`;
     } else if (hi.n >= 3) {
       headline = `High confidence (4–5) is ${pct(hi.winRate)} win so far.`;
       story = `Keep logging confidence — you need a few more bets for a reliable signal.`;
@@ -1004,7 +1021,7 @@ export default function InsightsScreen() {
           </View>
         </Card>
 
-        {/* Risk Profile (core always visible; breakdown collapsible) */}
+        {/* Risk Profile */}
         <Card title="Your risk profile" subtitle="Built based on your emotional state at the time of logging your bets.">
           <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18, lineHeight: 22 }}>{risk.profileLine}</Text>
 
@@ -1013,7 +1030,12 @@ export default function InsightsScreen() {
             <DonutRing highPct={risk.mix.highPct} midPct={risk.mix.midPct} lowPct={risk.mix.lowPct} />
 
             <View style={{ flex: 1, gap: 10 }}>
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Bets by risk level</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+                Bets by risk level{" "}
+                {risk.mix.unknown ? (
+                  <Text style={{ color: Theme.sub, fontWeight: "800" }}>(classified only)</Text>
+                ) : null}
+              </Text>
 
               <View style={{ gap: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
@@ -1040,6 +1062,22 @@ export default function InsightsScreen() {
                     {risk.mix.low} <Text style={{ color: Theme.sub, fontWeight: "900" }}>({pct(risk.mix.lowPct)})</Text>
                   </Text>
                 </View>
+
+                {risk.mix.unknown ? (
+                  <>
+                    <View style={{ height: 1, backgroundColor: Theme.border, opacity: 0.8 }} />
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>⚪️ Unknown</Text>
+                      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+                        {risk.mix.unknown}{" "}
+                        <Text style={{ color: Theme.sub, fontWeight: "900" }}>({pct(risk.mix.unknownPct)})</Text>
+                      </Text>
+                    </View>
+                    <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12, marginTop: -2, lineHeight: 16 }}>
+                      Unknown = bets where no emotions were logged
+                    </Text>
+                  </>
+                ) : null}
               </View>
             </View>
           </View>
@@ -1049,7 +1087,6 @@ export default function InsightsScreen() {
             <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>Performance by risk level</Text>
             <Text style={{ color: Theme.sub, fontWeight: "800", lineHeight: 18 }}>{risk.perfSummary}</Text>
 
-            {/* breakdown toggle */}
             <SectionToggle
               open={openRiskBreakdown}
               onPress={() => setOpenRiskBreakdown((v) => !v)}
@@ -1057,7 +1094,6 @@ export default function InsightsScreen() {
               hint={!hasSettled ? "Settle bets to populate the breakdown." : `Shows win rate, ROI, and net by risk bucket.`}
             />
 
-            {/* breakdown content */}
             {openRiskBreakdown ? (
               !hasSettled ? (
                 <Text style={{ color: Theme.sub, fontWeight: "800" }}>No settled bets yet.</Text>
@@ -1093,7 +1129,7 @@ export default function InsightsScreen() {
           </View>
         </Card>
 
-        {/* Confidence edge (core always visible; exact breakdown collapsible) */}
+        {/* Confidence edge */}
         <Card title="Confidence edge" subtitle="Your conviction level is one of your strongest discipline signals.">
           {!hasSettled ? (
             <Text style={{ color: Theme.sub, fontWeight: "800" }}>No settled bets yet.</Text>
@@ -1109,7 +1145,6 @@ export default function InsightsScreen() {
             </View>
           ) : (
             <View style={{ gap: 12 }}>
-              {/* core: headline takeaway */}
               <View
                 style={{
                   backgroundColor: Theme.bg,
@@ -1132,7 +1167,6 @@ export default function InsightsScreen() {
                 </View>
               </View>
 
-              {/* core: big tiles (explicit win rate) */}
               <View style={{ flexDirection: "row", gap: 12 }}>
                 <StatTile
                   title="High confidence (4–5)"
@@ -1156,7 +1190,6 @@ export default function InsightsScreen() {
                 />
               </View>
 
-              {/* core: discipline + action */}
               <View
                 style={{
                   backgroundColor: Theme.bg,
@@ -1192,7 +1225,6 @@ export default function InsightsScreen() {
                 ))}
               </View>
 
-              {/* breakdown toggle */}
               <SectionToggle
                 open={openConfidenceBreakdown}
                 onPress={() => setOpenConfidenceBreakdown((v) => !v)}
@@ -1200,7 +1232,6 @@ export default function InsightsScreen() {
                 hint={openConfidenceBreakdown ? "Win rate + ROI + net for each confidence level." : "See 1/5 through 5/5 performance."}
               />
 
-              {/* breakdown content */}
               {openConfidenceBreakdown ? (
                 <View style={{ gap: 10, marginTop: 6 }}>
                   <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -1296,7 +1327,7 @@ export default function InsightsScreen() {
                   <View style={{ flex: 1, gap: 4 }}>
                     <Text style={{ color: Theme.text, fontWeight: "900" }}>By bet type</Text>
                     <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
-                      {betTypeRows.length
+                      {confidenceImpact && betTypeRows.length
                         ? `Top: ${betTypeRows[0].label} • ${pct(betTypeRows[0].winRate)} • Net ${fmtMoney(betTypeRows[0].net, 0)}`
                         : "No settled bets yet."}
                     </Text>

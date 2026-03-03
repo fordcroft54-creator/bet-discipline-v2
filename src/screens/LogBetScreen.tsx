@@ -1,3 +1,4 @@
+// src/screens/LogBetScreen.tsx
 import { useFocusEffect, router } from "expo-router";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -23,11 +24,15 @@ import { Field } from "../ui/Field";
 import { Theme } from "../ui/Theme";
 
 /**
- * LogBetScreen (touch fix)
- * ✅ Fixes “can’t tap date row / top fields” by preventing backdrop Pressables from stealing touches
- * ✅ Bet date modal + Other -> native picker
- * ✅ Keeps all prior functionality
- * ✅ REMOVED emotion selector from weekly budget friction modal
+ * LogBetScreen (REDESIGNED v3)
+ * ✅ Date required + top
+ * ✅ Stake required, keyboard shows "Done" (returnKeyType="done")
+ * ✅ Confidence required (Mid label)
+ * ✅ Bet summary required
+ * ✅ Emotions optional but encouraged; max selected = 3
+ * ✅ Emotions expand inline under each group
+ * ✅ Details optional; sport/bet type are NOT preselected (null until user picks)
+ * ✅ Removed redundant tip line under bet summary
  */
 
 const SPORTS = [
@@ -125,6 +130,8 @@ const EMOTION_LABEL_BY_VALUE: Record<string, string> = ALL_EMOTIONS.reduce(
   },
   {} as Record<string, string>
 );
+
+type EmotionGroupKey = keyof typeof EMOTION_GROUPS;
 
 /** ✅ Touch-safe sheet modal: backdrop is its own layer BEHIND content */
 function SheetModal({
@@ -240,38 +247,10 @@ function BetDateModal({
       <View style={{ height: 12 }} />
 
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-        <Chip
-          label="Today"
-          selected={false}
-          onPress={() => {
-            onPickQuick(0);
-            onClose();
-          }}
-        />
-        <Chip
-          label="Yesterday"
-          selected={false}
-          onPress={() => {
-            onPickQuick(1);
-            onClose();
-          }}
-        />
-        <Chip
-          label="2 days ago"
-          selected={false}
-          onPress={() => {
-            onPickQuick(2);
-            onClose();
-          }}
-        />
-        <Chip
-          label="3 days ago"
-          selected={false}
-          onPress={() => {
-            onPickQuick(3);
-            onClose();
-          }}
-        />
+        <Chip label="Today" selected={false} onPress={() => (onPickQuick(0), onClose())} />
+        <Chip label="Yesterday" selected={false} onPress={() => (onPickQuick(1), onClose())} />
+        <Chip label="2 days ago" selected={false} onPress={() => (onPickQuick(2), onClose())} />
+        <Chip label="3 days ago" selected={false} onPress={() => (onPickQuick(3), onClose())} />
         <Chip
           label="Other…"
           selected={false}
@@ -283,7 +262,6 @@ function BetDateModal({
       </View>
 
       <View style={{ height: 14 }} />
-
       <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
         Tip: “Other…” lets you pick any date.
       </Text>
@@ -423,73 +401,54 @@ function ConfidencePill({
   );
 }
 
-function EmotionSection({
-  title,
-  subtitle,
-  items,
-  selected,
-  onToggle,
-}: {
-  title: string;
-  subtitle?: string;
-  items: readonly { label: string; value: Emotion }[];
-  selected: Emotion[];
-  onToggle: (v: Emotion) => void;
-}) {
+function SmallHeader({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
-    <View style={{ gap: 8 }}>
-      <View style={{ gap: 2 }}>
-        <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 14 }}>{title}</Text>
-        {subtitle ? (
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>{subtitle}</Text>
-        ) : null}
-      </View>
-
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
-        {items.map((e) => (
-          <Chip
-            key={e.value}
-            label={e.label}
-            selected={selected.includes(e.value)}
-            onPress={() => onToggle(e.value)}
-          />
-        ))}
-      </View>
+    <View style={{ gap: 2 }}>
+      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>{title}</Text>
+      {subtitle ? (
+        <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>{subtitle}</Text>
+      ) : null}
     </View>
   );
 }
 
 export default function LogBetScreen() {
   const bump = useAppStore((s) => s.bump);
-
   const scrollRef = useRef<ScrollView>(null);
 
-  const [sport, setSport] = useState<Sport>("NFL");
-  const [betType, setBetType] = useState<BetType>("Straight / Moneyline");
+  // Details (optional)
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const [sportOther, setSportOther] = useState("");
-  const [betTypeOther, setBetTypeOther] = useState("");
-
-  const [stake, setStake] = useState("");
-  const [eventLabel, setEventLabel] = useState("");
-
+  // Required top: date
   const [placedAt, setPlacedAt] = useState<Date>(() => new Date());
   const [betDateModalOpen, setBetDateModalOpen] = useState(false);
 
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [iosCalendarDraft, setIosCalendarDraft] = useState<Date>(() => new Date());
 
-  const [emotions, setEmotions] = useState<Emotion[]>([]);
-  const EMOTION_MAX = 3;
-
-  const [confidence, setConfidence] = useState<Confidence | null>(null);
-
-  const [busy, setBusy] = useState(false);
-
+  // Optional details (NOT preselected)
+  const [sport, setSport] = useState<Sport | null>(null);
+  const [betType, setBetType] = useState<BetType | null>(null);
+  const [sportOther, setSportOther] = useState("");
+  const [betTypeOther, setBetTypeOther] = useState("");
   const [sportOpen, setSportOpen] = useState(false);
   const [betTypeOpen, setBetTypeOpen] = useState(false);
 
-  // “About to exceed weekly budget” friction modal (scrollable)
+  // Core required
+  const [stake, setStake] = useState("");
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
+
+  // Memory anchor required
+  const [betSummary, setBetSummary] = useState("");
+
+  // Why (optional but encouraged)
+  const WHY_MAX = 3; // ✅ requested
+  const [openGroup, setOpenGroup] = useState<EmotionGroupKey | null>(null);
+  const [emotions, setEmotions] = useState<Emotion[]>([]);
+
+  const [busy, setBusy] = useState(false);
+
+  // Modals for budget/caps (unchanged)
   const [budgetModalOpen, setBudgetModalOpen] = useState(false);
   const [budgetModalData, setBudgetModalData] = useState<{
     budget: number;
@@ -497,7 +456,6 @@ export default function LogBetScreen() {
     thisBet: number;
   } | null>(null);
 
-  // “You’re already over caps” warning modal on tab open
   const [capWarningOpen, setCapWarningOpen] = useState(false);
   const [capWarning, setCapWarning] = useState<{
     weeklyBudget?: number;
@@ -511,51 +469,36 @@ export default function LogBetScreen() {
   const stakeNum = useMemo(() => Number(stake), [stake]);
 
   const stakeRef = useRef<TextInput | null>(null);
-  const eventRef = useRef<any>(null);
+  const summaryRef = useRef<any>(null);
 
-  // ✅ used for “scroll stake to ~10% down screen”
+  // Scroll-to-stake behavior retained (used in budget modal)
   const stakeYRef = useRef<number>(0);
   const scrollToStakeWithOffset = (animated = true) => {
     const h = Dimensions.get("window").height || 800;
-    const offset = Math.round(h * 0.1); // ✅ 10%
+    const offset = Math.round(h * 0.1);
     const targetY = Math.max(0, stakeYRef.current - offset);
     scrollRef.current?.scrollTo({ y: targetY, animated });
   };
 
   const normalizedSport = useMemo(() => {
+    if (!sport) return null;
     if (sport !== "Other") return sport;
     const v = sportOther.trim();
     return v ? v : "Other";
   }, [sport, sportOther]);
 
   const normalizedBetType = useMemo(() => {
+    if (!betType) return null;
     if (betType !== "Other") return betType;
     const v = betTypeOther.trim();
     return v ? v : "Other";
   }, [betType, betTypeOther]);
 
-  const selectedEmotionLabels = useMemo(() => {
-    return emotions.map((v) => EMOTION_LABEL_BY_VALUE[v] ?? v);
-  }, [emotions]);
-
-  const toggleEmotion = (v: Emotion) => {
-    setEmotions((prev) => {
-      const has = prev.includes(v);
-      if (has) return prev.filter((x) => x !== v);
-
-      if (prev.length >= EMOTION_MAX) {
-        Alert.alert("Too many selections", `Pick up to ${EMOTION_MAX}.`);
-        return prev;
-      }
-      return [...prev, v];
-    });
-  };
-
   const confidenceLabel = useMemo(() => {
     if (confidence == null) return "—";
     if (confidence === 1) return "Very low";
     if (confidence === 2) return "Low";
-    if (confidence === 3) return "Medium";
+    if (confidence === 3) return "Mid";
     if (confidence === 4) return "High";
     return "Very high";
   }, [confidence]);
@@ -596,10 +539,30 @@ export default function LogBetScreen() {
 
   const openOtherCalendar = () => {
     setBetDateModalOpen(false);
-    if (Platform.OS === "ios") {
-      setIosCalendarDraft(placedAt);
-    }
+    if (Platform.OS === "ios") setIosCalendarDraft(placedAt);
     setCalendarOpen(true);
+  };
+
+  const selectedWhyLabels = useMemo(() => {
+    return emotions.map((v) => EMOTION_LABEL_BY_VALUE[v] ?? v);
+  }, [emotions]);
+
+  const toggleWhy = (v: Emotion) => {
+    setEmotions((prev) => {
+      const has = prev.includes(v);
+      if (has) return prev.filter((x) => x !== v);
+
+      if (prev.length >= WHY_MAX) {
+        Alert.alert("Too many selections", `Pick up to ${WHY_MAX}.`);
+        return prev;
+      }
+      return [...prev, v];
+    });
+  };
+
+  const clearWhy = () => {
+    setEmotions([]);
+    setOpenGroup(null);
   };
 
   const getGoals = async (userId: string) => {
@@ -684,17 +647,24 @@ export default function LogBetScreen() {
 
       const payload: any = {
         user_id: user.id,
-        sport: normalizedSport,
-        bet_type: normalizedBetType,
         stake: stakeNum,
-        event_label: eventLabel.trim() ? eventLabel.trim() : null,
+        confidence,
+
+        // Memory anchor
+        event_label: betSummary.trim(),
+
+        // REQUIRED date
         placed_at: placedAt.toISOString(),
 
+        // Optional details (store null if not selected)
+        sport: normalizedSport ?? null,
+        bet_type: normalizedBetType ?? null,
+
+        // Optional why tags
         emotion: emotions[0] ?? null,
-        emotions,
+        emotions: emotions.length ? emotions : [],
 
         status: "open",
-        confidence,
       };
 
       const { error } = await supabase.from("bets").insert(payload);
@@ -702,15 +672,18 @@ export default function LogBetScreen() {
 
       bump();
 
+      // reset
+      setPlacedAt(new Date());
       setStake("");
-      setEventLabel("");
-      setSport("NFL");
-      setBetType("Straight / Moneyline");
+      setConfidence(null);
+      setBetSummary("");
+      clearWhy();
+
+      setSport(null);
+      setBetType(null);
       setSportOther("");
       setBetTypeOther("");
-      setEmotions([]);
-      setConfidence(null);
-      setPlacedAt(new Date());
+      setDetailsOpen(false);
 
       router.replace("/(tabs)/bets" as any);
     } catch (e: any) {
@@ -720,7 +693,6 @@ export default function LogBetScreen() {
     }
   };
 
-  // ✅ No more emotion selector in this modal — just proceed
   const continueFromBudgetModal = async () => {
     if (!budgetModalData) return;
     setBudgetModalOpen(false);
@@ -728,28 +700,46 @@ export default function LogBetScreen() {
     await actuallySaveBet();
   };
 
+  const validateRequired = () => {
+    if (!(placedAt instanceof Date) || Number.isNaN(placedAt.getTime())) {
+      Alert.alert("Bet date", "Please select a valid bet date.");
+      return false;
+    }
+    if (!stake || !Number.isFinite(stakeNum) || stakeNum <= 0) {
+      Alert.alert("Missing stake", "Enter a valid stake amount.");
+      return false;
+    }
+    if (confidence == null) {
+      Alert.alert("Confidence", "Pick a confidence level.");
+      return false;
+    }
+    const s = betSummary.trim();
+    if (!s) {
+      Alert.alert(
+        "Bet summary",
+        "Add a quick summary so you’ll remember this when it’s time to settle.\n\nExample: “Chiefs -3 vs Bills”"
+      );
+      return false;
+    }
+
+    // If user opened details and picked "Other", enforce typing
+    if (sport === "Other" && detailsOpen && !sportOther.trim()) {
+      Alert.alert("Sport", "Please type the sport (or pick a listed one).");
+      return false;
+    }
+    if (betType === "Other" && detailsOpen && !betTypeOther.trim()) {
+      Alert.alert("Bet type", "Please type the bet type (or pick a listed one).");
+      return false;
+    }
+
+    return true;
+  };
+
   const save = async () => {
     Keyboard.dismiss();
     if (busy) return;
 
-    if (!stake || !Number.isFinite(stakeNum) || stakeNum <= 0) {
-      return Alert.alert("Missing stake", "Enter a valid stake amount.");
-    }
-    if (sport === "Other" && !sportOther.trim()) {
-      return Alert.alert("Sport", "Please type the sport (or pick a listed one).");
-    }
-    if (betType === "Other" && !betTypeOther.trim()) {
-      return Alert.alert("Bet type", "Please type the bet type (or pick a listed one).");
-    }
-    if (!emotions.length) {
-      return Alert.alert("Check-in", "Pick at least 1 selection.");
-    }
-    if (confidence == null) {
-      return Alert.alert("Confidence", "Pick a confidence level (1–5).");
-    }
-    if (!(placedAt instanceof Date) || Number.isNaN(placedAt.getTime())) {
-      return Alert.alert("Bet date", "Please select a valid bet date.");
-    }
+    if (!validateRequired()) return;
 
     try {
       const { data: userData, error: userErr } = await supabase.auth.getUser();
@@ -811,7 +801,7 @@ export default function LogBetScreen() {
     return Math.max(0, after - budget);
   }, [budgetModalData]);
 
-  // ✅ Show cap warning EVERY time user focuses Log tab (no session de-dupe)
+  // Cap warning on focus (unchanged)
   useFocusEffect(
     useCallback(() => {
       let alive = true;
@@ -846,7 +836,6 @@ export default function LogBetScreen() {
               weeklyBudget: weeklyBudget > 0 ? weeklyBudget : undefined,
               weeklyUsed: weeklyBudget > 0 ? weeklyUsed : undefined,
               weeklyOver: weeklyOver > 0 ? weeklyOver : undefined,
-
               monthlyLossCap: monthlyLossCap > 0 ? monthlyLossCap : undefined,
               monthlyLossUsed: monthlyLossCap > 0 ? monthlyLossUsed : undefined,
               monthlyOver: monthlyOver > 0 ? monthlyOver : undefined,
@@ -870,26 +859,100 @@ export default function LogBetScreen() {
     }, [])
   );
 
+  const EmotionGroupBlock = ({ k }: { k: EmotionGroupKey }) => {
+    const g = EMOTION_GROUPS[k];
+    const expanded = openGroup === k;
+
+    return (
+      <View style={{ gap: 10 }}>
+        <Pressable
+          onPress={() => setOpenGroup(expanded ? null : k)}
+          style={{
+            backgroundColor: Theme.card,
+            borderWidth: 1,
+            borderColor: expanded ? Theme.text : Theme.border,
+            borderRadius: 14,
+            padding: 12,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <View style={{ flex: 1, paddingRight: 10 }}>
+            <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 14 }}>{g.title}</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12, marginTop: 2 }}>
+              {g.subtitle}
+            </Text>
+          </View>
+          <Text style={{ color: Theme.sub, fontSize: 18, fontWeight: "900" }}>
+            {expanded ? "▴" : "▾"}
+          </Text>
+        </Pressable>
+
+        {expanded ? (
+          <View
+            style={{
+              backgroundColor: Theme.card,
+              borderWidth: 1,
+              borderColor: Theme.border,
+              borderRadius: 14,
+              padding: 12,
+              gap: 10,
+            }}
+          >
+            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
+              Pick up to {WHY_MAX}
+            </Text>
+
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+              {g.items.map((e) => (
+                <Chip
+                  key={e.value}
+                  label={e.label}
+                  selected={emotions.includes(e.value as Emotion)}
+                  onPress={() => toggleWhy(e.value as Emotion)}
+                />
+              ))}
+            </View>
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+
+  const sportValueLabel = useMemo(() => {
+    if (!sport) return "— (optional)";
+    if (sport !== "Other") return sport;
+    return sportOther.trim() ? `Other: ${sportOther.trim()}` : "Other";
+  }, [sport, sportOther]);
+
+  const betTypeValueLabel = useMemo(() => {
+    if (!betType) return "— (optional)";
+    if (betType !== "Other") return betType;
+    return betTypeOther.trim() ? `Other: ${betTypeOther.trim()}` : "Other";
+  }, [betType, betTypeOther]);
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg }}>
+      {/* Only show SelectModals when values exist; for null, pass a safe placeholder */}
       <SelectModal
         title="Select sport"
         visible={sportOpen}
         options={SPORTS}
-        selected={sport}
-        onSelect={setSport}
+        selected={(sport ?? "NFL") as Sport}
+        onSelect={(v) => setSport(v)}
         onClose={() => setSportOpen(false)}
       />
       <SelectModal
         title="Select bet type"
         visible={betTypeOpen}
         options={BET_TYPES}
-        selected={betType}
-        onSelect={setBetType}
+        selected={(betType ?? "Straight / Moneyline") as BetType}
+        onSelect={(v) => setBetType(v)}
         onClose={() => setBetTypeOpen(false)}
       />
 
-      {/* ✅ Bet date quick modal */}
+      {/* Bet date quick modal */}
       <BetDateModal
         visible={betDateModalOpen}
         placedAtLabel={placedAtLabel}
@@ -898,7 +961,7 @@ export default function LogBetScreen() {
         onPickOther={() => openOtherCalendar()}
       />
 
-      {/* ✅ Native calendar (touch-safe) */}
+      {/* Native calendar */}
       <SheetModal
         visible={calendarOpen}
         onClose={() => setCalendarOpen(false)}
@@ -947,7 +1010,7 @@ export default function LogBetScreen() {
         )}
       </SheetModal>
 
-      {/* ✅ Cap warning modal (touch-safe) */}
+      {/* Cap warning modal */}
       <SheetModal
         visible={capWarningOpen}
         onClose={() => setCapWarningOpen(false)}
@@ -1039,7 +1102,7 @@ export default function LogBetScreen() {
         </View>
       </SheetModal>
 
-      {/* ✅ Weekly budget friction modal (touch-safe) — NO emotion selector */}
+      {/* Weekly budget friction modal */}
       <SheetModal
         visible={budgetModalOpen}
         onClose={() => setBudgetModalOpen(false)}
@@ -1089,7 +1152,6 @@ export default function LogBetScreen() {
           ) : null}
 
           <View style={{ height: 12 }} />
-
           <Text style={{ color: Theme.sub, fontSize: 12, fontWeight: "700" }}>
             Tip: Consider lowering your stake or taking a quick break.
           </Text>
@@ -1117,7 +1179,6 @@ export default function LogBetScreen() {
         </View>
 
         <View style={{ height: 10 }} />
-
         <Button title="Log anyway" onPress={continueFromBudgetModal} disabled={busy} />
       </SheetModal>
 
@@ -1129,50 +1190,17 @@ export default function LogBetScreen() {
       >
         <Text style={{ color: Theme.text, fontSize: 24, fontWeight: "900" }}>Log a Bet</Text>
 
-        <SelectRow label="Bet date" value={placedAtLabel} onPress={() => setBetDateModalOpen(true)} />
+        {/* Date (required, top) */}
+        <SelectRow label="Bet date (required)" value={placedAtLabel} onPress={() => setBetDateModalOpen(true)} />
 
-        <SelectRow
-          label="Sport"
-          value={sport === "Other" ? (sportOther.trim() ? `Other: ${sportOther.trim()}` : "Other") : sport}
-          onPress={() => setSportOpen(true)}
-        />
-        {sport === "Other" && (
-          <Field
-            label="Sport (Other)"
-            value={sportOther}
-            onChangeText={setSportOther}
-            placeholder="e.g., Esports, Table Tennis"
-            returnKeyType="next"
-            onSubmitEditing={() => setBetTypeOpen(true)}
-          />
-        )}
-
-        <SelectRow
-          label="Bet Type"
-          value={
-            betType === "Other" ? (betTypeOther.trim() ? `Other: ${betTypeOther.trim()}` : "Other") : betType
-          }
-          onPress={() => setBetTypeOpen(true)}
-        />
-        {betType === "Other" && (
-          <Field
-            label="Bet Type (Other)"
-            value={betTypeOther}
-            onChangeText={setBetTypeOther}
-            placeholder="e.g., Teaser"
-            returnKeyType="next"
-            onSubmitEditing={() => stakeRef.current?.focus?.()}
-          />
-        )}
-
-        {/* Stake */}
+        {/* Stake (required) */}
         <View
           style={{ gap: 6 }}
           onLayout={(e) => {
             stakeYRef.current = e.nativeEvent.layout.y;
           }}
         >
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>Stake Amount</Text>
+          <Text style={{ color: Theme.sub, fontWeight: "800" }}>Stake (required)</Text>
 
           <View
             style={{
@@ -1196,13 +1224,85 @@ export default function LogBetScreen() {
               value={stake}
               onChangeText={(t) => setStake(t.replace(/[^0-9.]/g, ""))}
               keyboardType="numeric"
-              returnKeyType="done"
+              returnKeyType="done" // ✅ requested
               blurOnSubmit
               onSubmitEditing={() => Keyboard.dismiss()}
               style={{
                 flex: 1,
                 color: Theme.text,
                 fontSize: 16,
+                fontWeight: "900",
+                padding: 0,
+                margin: 0,
+              }}
+              placeholder="0"
+              placeholderTextColor={Theme.sub}
+            />
+          </View>
+        </View>
+
+        {/* Confidence (required) */}
+        <View style={{ gap: 6 }}>
+          <Text style={{ color: Theme.sub, fontWeight: "800" }}>Confidence (required)</Text>
+          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
+            Current:{" "}
+            <Text style={{ color: Theme.text, fontWeight: "900" }}>
+              {confidence == null ? "— (pick one)" : `${confidenceLabel}`}
+            </Text>
+          </Text>
+        </View>
+
+        <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
+          <ConfidencePill
+            label="Very low"
+            selected={confidence === 1}
+            onPress={() => setConfidence(1)}
+            flexGrow={1.35}
+          />
+          <ConfidencePill label="Low" selected={confidence === 2} onPress={() => setConfidence(2)} flexGrow={0.95} />
+          <ConfidencePill label="Mid" selected={confidence === 3} onPress={() => setConfidence(3)} flexGrow={0.85} />
+          <ConfidencePill
+            label="High"
+            selected={confidence === 4}
+            onPress={() => setConfidence(4)}
+            flexGrow={0.95}
+          />
+          <ConfidencePill
+            label="Very high"
+            selected={confidence === 5}
+            onPress={() => setConfidence(5)}
+            flexGrow={1.35}
+          />
+        </View>
+
+        {/* Bet summary (required memory anchor) */}
+        <View style={{ gap: 8 }}>
+          <SmallHeader
+            title="What was this bet? (required)"
+            subtitle="Write it how you’d remember it when it’s time to settle."
+          />
+
+          <View
+            style={{
+              backgroundColor: Theme.card,
+              borderWidth: 1,
+              borderColor: Theme.border,
+              borderRadius: 14,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+            }}
+          >
+            <TextInput
+              ref={summaryRef}
+              value={betSummary}
+              onChangeText={setBetSummary}
+              placeholder='e.g., "Chiefs -3 vs Bills" or "Parlay: Lakers + Over"'
+              placeholderTextColor={Theme.sub}
+              returnKeyType="done"
+              onSubmitEditing={() => Keyboard.dismiss()}
+              style={{
+                color: Theme.text,
+                fontSize: 15,
                 fontWeight: "800",
                 padding: 0,
                 margin: 0,
@@ -1211,90 +1311,96 @@ export default function LogBetScreen() {
           </View>
         </View>
 
-        <Field
-          ref={eventRef}
-          label="Game / Event (optional)"
-          value={eventLabel}
-          onChangeText={setEventLabel}
-          placeholder="e.g., Hawks vs Heat"
-          returnKeyType="done"
-          blurOnSubmit
-          onSubmitEditing={() => Keyboard.dismiss()}
-        />
+        {/* Why (optional) */}
+        <View style={{ gap: 10 }}>
+          <SmallHeader
+            title="Be honest — what’s driving this? (optional)"
+            subtitle="Pick at least one if you can — this powers your insights."
+          />
 
-        {/* Check-in */}
-        <View style={{ gap: 6 }}>
-          <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>What’s driving this bet?</Text>
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
-            Pick up to {EMOTION_MAX}. Be honest — this powers your insights.
-          </Text>
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
-            You picked:{" "}
-            <Text style={{ color: Theme.text, fontWeight: "900" }}>
-              {selectedEmotionLabels.length ? selectedEmotionLabels.join(", ") : "—"}
+          {emotions.length ? (
+            <View
+              style={{
+                backgroundColor: Theme.card,
+                borderWidth: 1,
+                borderColor: Theme.border,
+                borderRadius: 14,
+                padding: 12,
+                gap: 6,
+              }}
+            >
+              <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>Selected</Text>
+              <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                {selectedWhyLabels.join(", ")}
+              </Text>
+
+              <View style={{ height: 6 }} />
+              <Button title="Clear" onPress={clearWhy} />
+            </View>
+          ) : null}
+
+          {/* Inline expand per group */}
+          <View style={{ gap: 12 }}>
+            <EmotionGroupBlock k="strategic" />
+            <EmotionGroupBlock k="recreational" />
+            <EmotionGroupBlock k="situational" />
+            <EmotionGroupBlock k="reactive" />
+          </View>
+        </View>
+
+        {/* Details (optional, collapsible) */}
+        <Pressable
+          onPress={() => setDetailsOpen((v) => !v)}
+          style={{
+            backgroundColor: Theme.card,
+            borderWidth: 1,
+            borderColor: Theme.border,
+            borderRadius: 14,
+            paddingVertical: 12,
+            paddingHorizontal: 12,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <View style={{ flex: 1, paddingRight: 10 }}>
+            <Text style={{ color: Theme.text, fontWeight: "900" }}>Add details (optional)</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12, marginTop: 2 }}>
+              Sport + bet type helps organize your history.
             </Text>
+          </View>
+          <Text style={{ color: Theme.sub, fontSize: 18, fontWeight: "900" }}>
+            {detailsOpen ? "▴" : "▾"}
           </Text>
-        </View>
+        </Pressable>
 
-        <View style={{ gap: 14 }}>
-          <EmotionSection
-            title={EMOTION_GROUPS.strategic.title}
-            subtitle={EMOTION_GROUPS.strategic.subtitle}
-            items={EMOTION_GROUPS.strategic.items as any}
-            selected={emotions}
-            onToggle={toggleEmotion}
-          />
-          <EmotionSection
-            title={EMOTION_GROUPS.recreational.title}
-            subtitle={EMOTION_GROUPS.recreational.subtitle}
-            items={EMOTION_GROUPS.recreational.items as any}
-            selected={emotions}
-            onToggle={toggleEmotion}
-          />
-          <EmotionSection
-            title={EMOTION_GROUPS.situational.title}
-            subtitle={EMOTION_GROUPS.situational.subtitle}
-            items={EMOTION_GROUPS.situational.items as any}
-            selected={emotions}
-            onToggle={toggleEmotion}
-          />
-          <EmotionSection
-            title={EMOTION_GROUPS.reactive.title}
-            subtitle={EMOTION_GROUPS.reactive.subtitle}
-            items={EMOTION_GROUPS.reactive.items as any}
-            selected={emotions}
-            onToggle={toggleEmotion}
-          />
-        </View>
+        {detailsOpen ? (
+          <View style={{ gap: 12 }}>
+            <SelectRow label="Sport" value={sportValueLabel} onPress={() => setSportOpen(true)} />
+            {sport === "Other" && (
+              <Field
+                label="Sport (Other)"
+                value={sportOther}
+                onChangeText={setSportOther}
+                placeholder="e.g., Esports, Table Tennis"
+                returnKeyType="next"
+                onSubmitEditing={() => setBetTypeOpen(true)}
+              />
+            )}
 
-        {/* Confidence */}
-        <View style={{ gap: 6 }}>
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>Confidence (1 = Very low, 5 = Very high)</Text>
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
-            Current:{" "}
-            <Text style={{ color: Theme.text, fontWeight: "900" }}>
-              {confidence == null ? "— (pick one)" : `${confidence} (${confidenceLabel})`}
-            </Text>
-          </Text>
-        </View>
-
-        <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
-          <ConfidencePill
-            label="1 · Very low"
-            selected={confidence === 1}
-            onPress={() => setConfidence(1)}
-            flexGrow={2.35}
-          />
-          <ConfidencePill label="2" selected={confidence === 2} onPress={() => setConfidence(2)} flexGrow={0.6} />
-          <ConfidencePill label="3" selected={confidence === 3} onPress={() => setConfidence(3)} flexGrow={0.6} />
-          <ConfidencePill label="4" selected={confidence === 4} onPress={() => setConfidence(4)} flexGrow={0.6} />
-          <ConfidencePill
-            label="5 · Very high"
-            selected={confidence === 5}
-            onPress={() => setConfidence(5)}
-            flexGrow={2.35}
-          />
-        </View>
+            <SelectRow label="Bet Type" value={betTypeValueLabel} onPress={() => setBetTypeOpen(true)} />
+            {betType === "Other" && (
+              <Field
+                label="Bet Type (Other)"
+                value={betTypeOther}
+                onChangeText={setBetTypeOther}
+                placeholder="e.g., Teaser"
+                returnKeyType="done"
+                onSubmitEditing={() => Keyboard.dismiss()}
+              />
+            )}
+          </View>
+        ) : null}
 
         <Button title={busy ? "Saving…" : "Log Bet"} onPress={save} disabled={busy} />
       </ScrollView>

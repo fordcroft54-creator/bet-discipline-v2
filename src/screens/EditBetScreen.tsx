@@ -28,6 +28,7 @@ import { Chip } from "../ui/Chip";
  * ✅ Global sport + bet type options (not based on user's history)
  * ✅ Edit result (Open / Win / Loss / Push)
  * ✅ If Win → enter "Payout" (saved to `profit`)
+ * ✅ Sport + Bet Type are OPTIONAL (not required)
  */
 
 type Result = "win" | "loss" | "push" | null;
@@ -301,16 +302,16 @@ export default function EditBetScreen() {
 
   const stakeNum = useMemo(() => toNumMoney(stakeText), [stakeText]);
 
+  // ✅ sport + bet type NOT required anymore
   const canSave = useMemo(() => {
     if (!betId) return false;
-    if (!tidy(sport) || !tidy(betType)) return false;
     if (!(stakeNum > 0)) return false;
     if (resultUI === "Win") {
       const payout = toNumMoney(payoutText);
       if (!(payout > 0)) return false;
     }
     return true;
-  }, [betId, sport, betType, stakeNum, resultUI, payoutText]);
+  }, [betId, stakeNum, resultUI, payoutText]);
 
   const toggleEmotion = useCallback((val: string) => {
     setSelectedEmotions((prev) => {
@@ -413,8 +414,6 @@ export default function EditBetScreen() {
     if (!betId) return;
 
     const stake = toNumMoney(stakeText);
-    if (!tidy(sport)) return Alert.alert("Missing", "Pick a sport.");
-    if (!tidy(betType)) return Alert.alert("Missing", "Pick a bet type.");
     if (!Number.isFinite(stake) || stake <= 0) return Alert.alert("Missing", "Enter a valid stake.");
 
     const { status, result } = uiToDbResult(resultUI);
@@ -451,9 +450,13 @@ export default function EditBetScreen() {
       if (userErr) throw userErr;
       if (!user) throw new Error("Not logged in.");
 
+      // ✅ store null when empty (cleaner than "")
+      const sportClean = tidy(sport);
+      const betTypeClean = tidy(betType);
+
       const payload = {
-        sport: tidy(sport),
-        bet_type: tidy(betType),
+        sport: sportClean ? sportClean : null,
+        bet_type: betTypeClean ? betTypeClean : null,
         stake,
         event_label: tidy(eventLabel) || null,
         emotions: selectedEmotions.length ? selectedEmotions : null,
@@ -752,7 +755,7 @@ export default function EditBetScreen() {
             <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>{placedAtLabel}</Text>
           </Pressable>
 
-          {/* Sport + Bet Type */}
+          {/* Sport + Bet Type (OPTIONAL) */}
           <View style={{ flexDirection: "row", gap: 10 }}>
             <Pressable
               onPress={() => setSportOpen(true)}
@@ -766,7 +769,7 @@ export default function EditBetScreen() {
                 gap: 6,
               }}
             >
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Sport</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Sport (optional)</Text>
               <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>{sport ? sport : "Select"}</Text>
             </Pressable>
 
@@ -782,7 +785,7 @@ export default function EditBetScreen() {
                 gap: 6,
               }}
             >
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Bet type</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Bet type (optional)</Text>
               <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
                 {betType ? betType : "Select"}
               </Text>
