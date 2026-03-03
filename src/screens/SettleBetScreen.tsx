@@ -127,12 +127,7 @@ export default function SettleBetScreen() {
           return;
         }
 
-        const { data: betRow, error: betErr } = await supabase
-          .from("bets")
-          .select("*")
-          .eq("id", betId)
-          .single();
-
+        const { data: betRow, error: betErr } = await supabase.from("bets").select("*").eq("id", betId).single();
         if (betErr) throw betErr;
 
         const b = (betRow ?? null) as Bet | null;
@@ -256,30 +251,31 @@ export default function SettleBetScreen() {
     };
   };
 
-  // ✅ Move the back button down ~8% of screen height, but keep it sensible across devices.
+  // keep your existing "down ~8%" placement
   const screenH = Dimensions.get("window").height;
   const backTop = Math.max(12, Math.round(screenH * 0.08));
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
-      {/* ✅ ALWAYS-VISIBLE Back button */}
+      {/* ✅ Back button UI now matches EditBetScreen */}
       <Pressable
         onPress={() => router.back()}
-        hitSlop={12}
+        hitSlop={10}
         style={{
           position: "absolute",
           top: backTop,
           left: 12,
           zIndex: 9999,
-          paddingVertical: 10,
-          paddingHorizontal: 12,
-          borderRadius: 999,
+
+          paddingVertical: 8,
+          paddingHorizontal: 10,
+          borderRadius: 10,
           borderWidth: 1,
-          borderColor: colors.border,
-          backgroundColor: colors.card,
+          borderColor: Theme.border,
+          backgroundColor: "transparent",
         }}
       >
-        <Text style={{ color: colors.text, fontWeight: "900" }}>← Back</Text>
+        <Text style={{ color: Theme.sub, fontWeight: "900" }}>Back</Text>
       </Pressable>
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
@@ -298,20 +294,12 @@ export default function SettleBetScreen() {
           >
             <Text style={{ fontSize: 18, fontWeight: "800", color: colors.text }}>{betTitle(bet)}</Text>
 
-            <Text style={{ marginTop: 6, color: colors.muted, fontWeight: "600" }}>
-              Stake: {money(stake)}
-            </Text>
+            <Text style={{ marginTop: 6, color: colors.muted, fontWeight: "600" }}>Stake: {money(stake)}</Text>
 
             <Text style={{ marginTop: 18, fontSize: 16, fontWeight: "800", color: colors.text }}>Result</Text>
 
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-              <Pressable
-                onPress={() => {
-                  setResult("win");
-                  // keep any existing input
-                }}
-                style={pillStyle("win")}
-              >
+              <Pressable onPress={() => setResult("win")} style={pillStyle("win")}>
                 <Text style={pillText("win")}>Win</Text>
               </Pressable>
 
@@ -336,7 +324,6 @@ export default function SettleBetScreen() {
               </Pressable>
             </View>
 
-            {/* ✅ Profit entry matches LogBet stake UI */}
             {result === "win" ? (
               <View style={{ marginTop: 16, gap: 10 }}>
                 <Text style={{ fontSize: 16, fontWeight: "800", color: colors.text }}>If Win:</Text>
@@ -395,9 +382,7 @@ export default function SettleBetScreen() {
                 paddingTop: 14,
               }}
             >
-              <Text style={{ fontSize: 16, fontWeight: "900", color: colors.text }}>
-                Monthly Loss After This:
-              </Text>
+              <Text style={{ fontSize: 16, fontWeight: "900", color: colors.text }}>Monthly Loss After This:</Text>
 
               <Text style={{ marginTop: 8, fontSize: 18, fontWeight: "900", color: colors.text }}>
                 {monthlyAfter === null ? "--" : `${money(monthlyAfter)} / ${money(monthlyLimit)}`}

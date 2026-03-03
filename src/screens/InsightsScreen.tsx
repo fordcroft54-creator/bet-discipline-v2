@@ -1,6 +1,8 @@
+// src/screens/InsightsScreen.tsx
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
+import Svg, { Circle, G } from "react-native-svg";
 import { supabase } from "../lib/supabase";
 import { useAppStore } from "../store/useAppStore";
 import { Theme } from "../ui/Theme";
@@ -19,52 +21,8 @@ type Bet = {
   settled_at: string | null;
 
   created_at?: string | null;
-  placed_at?: string | null; // ✅ actual bet date
+  placed_at?: string | null;
 };
-
-// ✅ Updated to match your NEW LogBet emotions (from your BetsScreen)
-const EMOTION_LABEL_BY_VALUE: Record<string, string> = {
-  // Strategic
-  confident: "🎉 Confident",
-  research: "🧠 Research-based",
-  system: "📊 System play",
-  pre_planned: "🗓️ Pre-planned",
-
-  // Recreational
-  fun: "🙂 Just for fun",
-  social: "👯 Social / with friends",
-  habit: "🔁 Habit / routine",
-
-  // Situational
-  bored: "😐 Bored",
-  fomo: "😬 FOMO",
-  impulsive: "⚡ Impulsive",
-  stressed: "😰 Stressed",
-  drinking: "🍺 Drinking",
-
-  // Reactive
-  chasing_losses: "😤 Chasing losses",
-  tilted: "😡 Tilted / frustrated",
-  revenge: "💢 Revenge bet",
-  doubling_down: "🔁 Doubling down",
-  desperate: "😵‍💫 Desperate",
-};
-
-function fmtMoney(n: number) {
-  if (!Number.isFinite(n)) return "$0";
-  const sign = n < 0 ? "-" : "";
-  return `${sign}$${Math.abs(n).toFixed(0)}`;
-}
-
-function pct(n: number) {
-  if (!Number.isFinite(n)) return "0%";
-  return `${Math.round(n * 100)}%`;
-}
-
-function clamp01(n: number) {
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
-}
 
 function tidy(s?: string | null) {
   if (!s) return "";
@@ -81,9 +39,29 @@ function titleCase(s: string) {
     .join(" ");
 }
 
-/** ✅ Confidence labels match LogBet:
- *  1=Very low, 2=Low, 3=Medium, 4=High, 5=Very high
- */
+function clamp01(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function pct(n: number, digits = 0) {
+  if (!Number.isFinite(n)) return "0%";
+  const v = n * 100;
+  if (digits <= 0) return `${Math.round(v)}%`;
+  return `${v.toFixed(digits)}%`;
+}
+
+/** ✅ Currency formatting */
+const USD0 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const USD2 = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+
+function fmtMoney(n: number, decimals: 0 | 2 = 0) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "$0";
+  return decimals === 2 ? USD2.format(x) : USD0.format(x);
+}
+
+/** ✅ Confidence labels */
 function confidenceLabel(n?: number | null) {
   if (n == null) return "";
   const x = Math.round(Number(n));
@@ -95,113 +73,12 @@ function confidenceLabel(n?: number | null) {
   return "Very high";
 }
 
-function Bar({
-  value,
-  labelLeft,
-  labelRight,
-}: {
-  value: number;
-  labelLeft?: string;
-  labelRight?: string;
-}) {
-  const v = clamp01(value);
-  return (
-    <View style={{ gap: 6 }}>
-      {labelLeft || labelRight ? (
-        <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-          <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
-            {labelLeft ?? ""}
-          </Text>
-          <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
-            {labelRight ?? ""}
-          </Text>
-        </View>
-      ) : null}
-
-      <View
-        style={{
-          height: 10,
-          backgroundColor: "#222838",
-          borderRadius: 999,
-          overflow: "hidden",
-          borderWidth: 1,
-          borderColor: Theme.border,
-        }}
-      >
-        <View
-          style={{
-            width: `${Math.round(v * 100)}%`,
-            height: "100%",
-            backgroundColor: "#ffffff",
-            opacity: 0.9,
-          }}
-        />
-      </View>
-    </View>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <View
-      style={{
-        flex: 1,
-        backgroundColor: Theme.card,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: Theme.border,
-        padding: 14,
-        gap: 6,
-        minWidth: 140,
-      }}
-    >
-      <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
-        {label}
-      </Text>
-      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 20 }}>
-        {value}
-      </Text>
-      {sub ? (
-        <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 12 }}>
-          {sub}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <View
-      style={{
-        backgroundColor: Theme.card,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: Theme.border,
-        padding: 14,
-        gap: 12,
-      }}
-    >
-      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>
-        {title}
-      </Text>
-      {children}
-    </View>
-  );
+function median(nums: number[]) {
+  if (!nums.length) return null;
+  const a = [...nums].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  if (a.length % 2 === 1) return a[mid];
+  return (a[mid - 1] + a[mid]) / 2;
 }
 
 type RangeKey = "7d" | "30d" | "90d" | "ytd" | "all";
@@ -246,38 +123,28 @@ function daysForRange(k: RangeKey) {
   return null;
 }
 
-/** ✅ Always use actual bet date for analytics.
- * If placed_at is missing (older rows), fall back to created_at.
- */
+/** ✅ Analytics date */
 function betDateIso(b: Bet) {
   return b.placed_at ?? b.created_at ?? null;
 }
 
-/** ===================== RISK SCORING (NEW) =====================
- * Option A: single bet risk score = MAX of selected emotions
- * Scores are based on your emotion GROUPS:
- * Strategic=0, Recreational=1, Situational=2, Reactive=3
- */
+/** ===================== RISK SCORING (Option A: MAX) ===================== */
 const EMOTION_RISK_SCORE: Record<string, number> = {
-  // Strategic (0)
   confident: 0,
   research: 0,
   system: 0,
   pre_planned: 0,
 
-  // Recreational (1)
   fun: 1,
   social: 1,
   habit: 1,
 
-  // Situational (2)
   bored: 2,
   fomo: 2,
   impulsive: 2,
   stressed: 2,
   drinking: 2,
 
-  // Reactive (3)
   chasing_losses: 3,
   tilted: 3,
   revenge: 3,
@@ -288,13 +155,8 @@ const EMOTION_RISK_SCORE: Record<string, number> = {
 type RiskLevel = "low" | "mid" | "high";
 
 function riskScoreForBet(emotions?: string[] | null, emotion?: string | null) {
-  const list =
-    emotions?.length ? emotions :
-    emotion ? [emotion] :
-    [];
-
+  const list = emotions?.length ? emotions : emotion ? [emotion] : [];
   if (!list.length) return 0;
-
   let max = 0;
   for (const e of list) {
     const key = tidy(e);
@@ -302,7 +164,7 @@ function riskScoreForBet(emotions?: string[] | null, emotion?: string | null) {
     const s = EMOTION_RISK_SCORE[key] ?? 0;
     if (s > max) max = s;
   }
-  return max; // 0..3
+  return max;
 }
 
 function riskLevelFromScore(score: number): RiskLevel {
@@ -311,42 +173,376 @@ function riskLevelFromScore(score: number): RiskLevel {
   return "low";
 }
 
+/** ===================== UI ===================== */
+function Bar({
+  value,
+  labelLeft,
+  labelRight,
+}: {
+  value: number;
+  labelLeft?: string;
+  labelRight?: string;
+}) {
+  const v = clamp01(value);
+  return (
+    <View style={{ gap: 6 }}>
+      {labelLeft || labelRight ? (
+        <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+          <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{labelLeft ?? ""}</Text>
+          <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{labelRight ?? ""}</Text>
+        </View>
+      ) : null}
+
+      <View
+        style={{
+          height: 10,
+          backgroundColor: "#222838",
+          borderRadius: 999,
+          overflow: "hidden",
+          borderWidth: 1,
+          borderColor: Theme.border,
+        }}
+      >
+        <View
+          style={{
+            width: `${Math.round(v * 100)}%`,
+            height: "100%",
+            backgroundColor: "#ffffff",
+            opacity: 0.9,
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+function Card({
+  title,
+  children,
+  subtitle,
+  right,
+}: {
+  title: string;
+  subtitle?: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <View
+      style={{
+        backgroundColor: Theme.card,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: Theme.border,
+        padding: 14,
+        gap: 10,
+      }}
+    >
+      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+        <View style={{ flex: 1, gap: 4 }}>
+          <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>{title}</Text>
+          {subtitle ? (
+            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12, lineHeight: 16 }}>{subtitle}</Text>
+          ) : null}
+        </View>
+        {right ? <View style={{ marginTop: 2 }}>{right}</View> : null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function PillRow({ range, setRange }: { range: RangeKey; setRange: (k: RangeKey) => void }) {
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+      {RANGE_OPTIONS.map((opt) => {
+        const active = opt.key === range;
+        return (
+          <Pressable
+            key={opt.key}
+            onPress={() => setRange(opt.key)}
+            style={{
+              paddingVertical: 8,
+              paddingHorizontal: 12,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: active ? Theme.text : Theme.border,
+              backgroundColor: active ? Theme.text : Theme.card,
+            }}
+          >
+            <Text
+              style={{
+                color: active ? Theme.bg : Theme.text,
+                fontWeight: "900",
+                fontSize: 12,
+                letterSpacing: 0.3,
+              }}
+            >
+              {opt.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function DeltaPill({ text }: { text: string }) {
+  return (
+    <View
+      style={{
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: Theme.border,
+        backgroundColor: Theme.card,
+      }}
+    >
+      <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{text}</Text>
+    </View>
+  );
+}
+
+function StatTile({
+  title,
+  value,
+  sub,
+  emoji,
+}: {
+  title: string;
+  value: string;
+  sub?: string;
+  emoji?: string;
+}) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: Theme.border,
+        padding: 12,
+        backgroundColor: Theme.bg,
+        gap: 6,
+        minWidth: 120,
+      }}
+    >
+      <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+        {emoji ? `${emoji} ` : ""}
+        {title}
+      </Text>
+      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>{value}</Text>
+      {sub ? <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{sub}</Text> : null}
+    </View>
+  );
+}
+
+function TinyPill({ text }: { text: string }) {
+  return (
+    <View
+      style={{
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: Theme.border,
+        backgroundColor: Theme.bg,
+      }}
+    >
+      <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>{text}</Text>
+    </View>
+  );
+}
+
+function SectionToggle({
+  open,
+  onPress,
+  label,
+  hint,
+}: {
+  open: boolean;
+  onPress: () => void;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={{
+        marginTop: 6,
+        padding: 12,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: Theme.border,
+        backgroundColor: Theme.bg,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+      }}
+    >
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={{ color: Theme.text, fontWeight: "900" }}>{label}</Text>
+        {hint ? <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{hint}</Text> : null}
+      </View>
+      <Text style={{ color: Theme.sub, fontWeight: "900" }}>{open ? "▲" : "▼"}</Text>
+    </Pressable>
+  );
+}
+
+/** ✅ Accurate Donut using react-native-svg (Expo includes this by default) */
+function DonutRing({ highPct, midPct, lowPct }: { highPct: number; midPct: number; lowPct: number }) {
+  const size = 132;
+  const stroke = 16;
+  const r = (size - stroke) / 2;
+  const cx = size / 2;
+  const cy = size / 2;
+  const C = 2 * Math.PI * r;
+
+  const total = Math.max(0, highPct) + Math.max(0, midPct) + Math.max(0, lowPct);
+  const h = total > 0 ? clamp01(highPct / total) : 0;
+  const m = total > 0 ? clamp01(midPct / total) : 0;
+  const l = total > 0 ? clamp01(lowPct / total) : 0;
+
+  const hLen = C * h;
+  const mLen = C * m;
+  const lLen = C * l;
+
+  const levels: { key: RiskLevel; pct: number; label: string }[] = [
+    { key: "low", pct: l, label: "Low" },
+    { key: "mid", pct: m, label: "Mid" },
+    { key: "high", pct: h, label: "High" },
+  ];
+  const top = [...levels].sort((a, b) => b.pct - a.pct)[0];
+  const centerLine = total === 0 ? "No bets" : `${top.label} ${pct(top.pct)}`;
+
+  const segs = [
+    { color: "#ff3b30", len: hLen }, // high
+    { color: "#ffcc00", len: mLen }, // mid
+    { color: "#34c759", len: lLen }, // low
+  ].filter((s) => s.len > 0.0001);
+
+  let offset = 0;
+
+  return (
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      <Svg width={size} height={size}>
+        <G rotation={-90} originX={cx} originY={cy}>
+          <Circle cx={cx} cy={cy} r={r} stroke="#2A3040" strokeWidth={stroke} fill="none" />
+          {segs.map((s, i) => {
+            const dash = `${s.len} ${C - s.len}`;
+            const dashOffset = -offset;
+            offset += s.len;
+            return (
+              <Circle
+                key={i}
+                cx={cx}
+                cy={cy}
+                r={r}
+                stroke={s.color}
+                strokeWidth={stroke}
+                strokeLinecap="round"
+                fill="none"
+                strokeDasharray={dash}
+                strokeDashoffset={dashOffset}
+                opacity={0.95}
+              />
+            );
+          })}
+        </G>
+      </Svg>
+
+      <View
+        style={{
+          position: "absolute",
+          width: size - stroke * 2,
+          height: size - stroke * 2,
+          borderRadius: (size - stroke * 2) / 2,
+          backgroundColor: Theme.card,
+          borderWidth: 1,
+          borderColor: Theme.border,
+          alignItems: "center",
+          justifyContent: "center",
+          paddingHorizontal: 10,
+        }}
+      >
+        <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>Risk</Text>
+        <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "900", fontSize: 14 }}>
+          {centerLine}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function StarsRow({ k }: { k: number }) {
+  const filled = Math.max(0, Math.min(5, Math.round(k)));
+  return (
+    <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <View
+          key={i}
+          style={{
+            width: i === 1 || i === 5 ? 18 : 16,
+            height: 10,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: Theme.border,
+            backgroundColor: i <= filled ? Theme.text : Theme.bg,
+            opacity: i <= filled ? 0.95 : 1,
+          }}
+        />
+      ))}
+      <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12, marginLeft: 6 }}>
+        {filled}/5 • {confidenceLabel(filled)}
+      </Text>
+    </View>
+  );
+}
+
+/** ===================== Screen ===================== */
 export default function InsightsScreen() {
   const revision = useAppStore((s) => s.revision);
 
   const [range, setRange] = useState<RangeKey>("30d");
-
   const [bets, setBets] = useState<Bet[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // previous-window comparison stats (only for 7/30/90)
   const [prevNet, setPrevNet] = useState<number | null>(null);
   const [prevWinRate, setPrevWinRate] = useState<number | null>(null);
-  const [prevHasSettled, setPrevHasSettled] = useState<boolean>(false);
+  const [prevHasSettled, setPrevHasSettled] = useState(false);
+
+  // existing details (bet type / sport)
+  const [openDetails, setOpenDetails] = useState(false);
+  const [openBetType, setOpenBetType] = useState(false);
+  const [openSport, setOpenSport] = useState(false);
+
+  // ✅ NEW: collapsible breakdowns *inside* the core cards
+  const [openRiskBreakdown, setOpenRiskBreakdown] = useState(false);
+  const [openConfidenceBreakdown, setOpenConfidenceBreakdown] = useState(false);
 
   const normalizedProfit = useCallback((b: Bet) => {
     const p = Number(b.profit ?? 0);
     const stake = Number(b.stake ?? 0);
 
     if (b.result === "win") return Number.isFinite(p) ? p : 0;
-
     if (b.result === "loss") {
       if (Number.isFinite(p) && p !== 0) return p;
       return -stake;
     }
-
     if (b.result === "push") return 0;
     return 0;
   }, []);
 
   const computeWindowStats = useCallback(
     (rows: Bet[]) => {
-      const settled = rows.filter((b) => b.status === "settled" && b.result !== null);
-      const wins = settled.filter((b) => b.result === "win").length;
-      const losses = settled.filter((b) => b.result === "loss").length;
-      const total = settled.length;
+      const settledRows = rows.filter((b) => b.status === "settled" && b.result !== null);
+      const wins = settledRows.filter((b) => b.result === "win").length;
+      const losses = settledRows.filter((b) => b.result === "loss").length;
+      const total = settledRows.length;
       const winRate = total ? wins / total : 0;
-      const net = settled.reduce((sum, b) => sum + normalizedProfit(b), 0);
+      const net = settledRows.reduce((sum, b) => sum + normalizedProfit(b), 0);
       return { hasSettled: total > 0, winRate, net, wins, losses, total };
     },
     [normalizedProfit]
@@ -369,38 +565,29 @@ export default function InsightsScreen() {
 
       const start = startForRange(range);
 
-      // ✅ pull placed_at as well
       const q = supabase
         .from("bets")
-        .select(
-          "stake,emotion,emotions,confidence,sport,bet_type,status,result,profit,settled_at,created_at,placed_at"
-        )
+        .select("stake,emotion,emotions,confidence,sport,bet_type,status,result,profit,settled_at,created_at,placed_at")
         .eq("user_id", user.id)
         .order("placed_at", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: false });
 
-      let rows: Bet[] = [];
-
-      // We local-filter by betDateIso so older rows with placed_at NULL behave correctly.
       const { data, error } = await q;
       if (error) throw error;
 
-      const allRows = ((data as any) ?? []) as Bet[];
+      const allRows = (((data as any) ?? []) as Bet[]) ?? [];
 
-      if (start) {
-        rows = allRows.filter((b) => {
-          const dIso = betDateIso(b);
-          if (!dIso) return false;
-          const d = new Date(dIso);
-          return Number.isFinite(d.getTime()) && d >= start;
-        });
-      } else {
-        rows = allRows;
-      }
+      const rows = start
+        ? allRows.filter((b) => {
+            const dIso = betDateIso(b);
+            if (!dIso) return false;
+            const d = new Date(dIso);
+            return Number.isFinite(d.getTime()) && d >= start;
+          })
+        : allRows;
 
       setBets(rows);
 
-      // previous window compare (only 7/30/90)
       const days = daysForRange(range);
       if (!days || !start) {
         setPrevNet(null);
@@ -445,75 +632,31 @@ export default function InsightsScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range]);
 
-  const settled = useMemo(() => bets.filter((b) => b.status === "settled"), [bets]);
-  const open = useMemo(() => bets.filter((b) => b.status !== "settled"), [bets]);
-  const settledWithResult = useMemo(
-    () => settled.filter((b) => b.result !== null),
-    [settled]
-  );
+  const settled = useMemo(() => bets.filter((b) => b.status === "settled" && b.result !== null), [bets]);
 
   const overall = useMemo(() => {
-    const wins = settledWithResult.filter((b) => b.result === "win").length;
-    const losses = settledWithResult.filter((b) => b.result === "loss").length;
-    const pushes = settledWithResult.filter((b) => b.result === "push").length;
+    const wins = settled.filter((b) => b.result === "win").length;
+    const losses = settled.filter((b) => b.result === "loss").length;
+    const pushes = settled.filter((b) => b.result === "push").length;
 
-    const total = settledWithResult.length;
-    const winRate = total > 0 ? wins / total : 0;
+    const total = settled.length;
+    const winRate = total ? wins / total : 0;
 
-    const totalStakedSettled = settledWithResult.reduce(
-      (sum, b) => sum + Number(b.stake ?? 0),
-      0
-    );
-
-    const net = settledWithResult.reduce((sum, b) => sum + normalizedProfit(b), 0);
-
-    const avgStake = total > 0 ? totalStakedSettled / total : 0;
+    const totalStakedSettled = settled.reduce((sum, b) => sum + Number(b.stake ?? 0), 0);
+    const net = settled.reduce((sum, b) => sum + normalizedProfit(b), 0);
     const roi = totalStakedSettled > 0 ? net / totalStakedSettled : 0;
 
-    // top emotion (across ALL bets in range)
-    const emoCounts: Record<string, number> = {};
-    for (const b of bets) {
-      const raw: string[] =
-        b.emotions && b.emotions.length
-          ? (b.emotions as any)
-          : b.emotion
-          ? ([b.emotion] as any)
-          : [];
-      const keys = raw.length ? raw : ["unknown"];
-      for (const e of keys) {
-        const key = tidy(e) || "unknown";
-        emoCounts[key] = (emoCounts[key] ?? 0) + 1;
-      }
-    }
-
-    const topEmotion =
-      Object.entries(emoCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-
-    return {
-      wins,
-      losses,
-      pushes,
-      total,
-      winRate,
-      net,
-      avgStake,
-      roi,
-      totalStakedSettled,
-      openCount: open.length,
-      totalCount: bets.length,
-      topEmotion,
-    };
-  }, [bets, open.length, settledWithResult, normalizedProfit]);
+    return { wins, losses, pushes, total, winRate, net, roi, totalStakedSettled };
+  }, [settled, normalizedProfit]);
 
   const deltas = useMemo(() => {
-    const canCompare = prevNet !== null && prevWinRate !== null && prevHasSettled;
-    if (!canCompare) {
+    const canCompare = prevNet !== null && prevWinRate !== null && prevHasSettled && overall.total > 0;
+    if (!canCompare)
       return {
         canCompare: false as const,
         netDeltaPct: null as number | null,
         winDeltaPts: null as number | null,
       };
-    }
 
     const netDeltaPct =
       prevNet === 0
@@ -527,23 +670,27 @@ export default function InsightsScreen() {
     const winDeltaPts = overall.winRate - (prevWinRate ?? 0);
 
     return { canCompare: true as const, netDeltaPct, winDeltaPts };
-  }, [overall.net, overall.winRate, prevNet, prevWinRate, prevHasSettled]);
+  }, [overall.net, overall.winRate, overall.total, prevNet, prevWinRate, prevHasSettled]);
 
-  /** ===================== RISK MIX (NEW) =====================
-   * - riskScore per bet = MAX emotion score (0..3)
-   * - bucketed low/mid/high
-   * - also calculates avg risk score KPI
-   * - and performance by risk level (settled bets)
-   */
+  const compareLine = useMemo(() => {
+    if (!deltas.canCompare) return null;
+    const days = daysForRange(range);
+    if (!days) return null;
+
+    const netArrow = (deltas.netDeltaPct ?? 0) >= 0 ? "↑" : "↓";
+    const winArrow = (deltas.winDeltaPts ?? 0) >= 0 ? "↑" : "↓";
+
+    return `vs previous ${days} days: Net ${netArrow} ${pct(Math.abs(deltas.netDeltaPct ?? 0))} • Win ${winArrow} ${Math.round(
+      Math.abs((deltas.winDeltaPts ?? 0) * 100)
+    )} pts`;
+  }, [deltas, range]);
+
+  /** ===== Risk profile + performance ===== */
   const risk = useMemo(() => {
-    // Mix across ALL bets (in range)
     let low = 0;
     let mid = 0;
     let high = 0;
 
-    let sumScore = 0;
-
-    // performance by risk (settled only)
     const perf: Record<RiskLevel, { n: number; wins: number; stakeSum: number; net: number }> = {
       low: { n: 0, wins: 0, stakeSum: 0, net: 0 },
       mid: { n: 0, wins: 0, stakeSum: 0, net: 0 },
@@ -552,23 +699,29 @@ export default function InsightsScreen() {
 
     for (const b of bets) {
       const score = riskScoreForBet(b.emotions ?? null, b.emotion ?? null);
-      sumScore += score;
+      const lvl = riskLevelFromScore(score);
 
-      const level = riskLevelFromScore(score);
-      if (level === "low") low += 1;
-      else if (level === "mid") mid += 1;
+      if (lvl === "low") low += 1;
+      else if (lvl === "mid") mid += 1;
       else high += 1;
 
       if (b.status === "settled" && b.result !== null) {
-        perf[level].n += 1;
-        perf[level].wins += b.result === "win" ? 1 : 0;
-        perf[level].stakeSum += Number(b.stake ?? 0);
-        perf[level].net += normalizedProfit(b);
+        perf[lvl].n += 1;
+        perf[lvl].wins += b.result === "win" ? 1 : 0;
+        perf[lvl].stakeSum += Number(b.stake ?? 0);
+        perf[lvl].net += normalizedProfit(b);
       }
     }
 
     const total = bets.length || 1;
-    const avgScore = bets.length ? sumScore / bets.length : 0; // 0..3
+    const lowPct = low / total;
+    const midPct = mid / total;
+    const highPct = high / total;
+
+    let profileLine = "Mostly strategic betting.";
+    if (highPct >= 0.35) profileLine = "High-risk betting is elevated.";
+    else if (midPct >= 0.35) profileLine = "You’re mixing in a lot of situational bets.";
+    else if (lowPct >= 0.75) profileLine = "You’re keeping risk low — solid discipline.";
 
     const toRow = (level: RiskLevel) => {
       const p = perf[level];
@@ -578,162 +731,227 @@ export default function InsightsScreen() {
       return { level, ...p, winRate, roi, avgStake };
     };
 
+    const rows = [toRow("high"), toRow("mid"), toRow("low")];
+
+    const bestByNet = [...rows].sort((a, b) => b.net - a.net)[0];
+    const worstByNet = [...rows].sort((a, b) => a.net - b.net)[0];
+
+    const name = (lvl: RiskLevel) => (lvl === "high" ? "high-risk" : lvl === "mid" ? "mid-risk" : "low-risk");
+
+    let perfSummary = "Settle bets to see how risk level performs.";
+    const totalSettledByRisk = rows.reduce((s, r) => s + r.n, 0);
+
+    if (totalSettledByRisk > 0) {
+      const bucketsWithData = rows.filter((r) => r.n > 0);
+      if (bucketsWithData.length === 1) {
+        const r = bucketsWithData[0];
+        perfSummary = `So far, all settled bets are ${name(r.level)}: ${pct(r.winRate)} win rate and ${fmtMoney(r.net, 0)} net.`;
+      } else {
+        perfSummary = `Best so far: ${name(bestByNet.level)} (${pct(bestByNet.winRate)} win, ${fmtMoney(bestByNet.net, 0)} net). Weakest: ${name(
+          worstByNet.level
+        )} (${pct(worstByNet.winRate)} win, ${fmtMoney(worstByNet.net, 0)} net).`;
+      }
+    }
+
     return {
-      mix: {
-        low,
-        mid,
-        high,
-        lowPct: low / total,
-        midPct: mid / total,
-        highPct: high / total,
-      },
-      avgScore,
-      perfRows: [toRow("high"), toRow("mid"), toRow("low")], // show riskiest first
+      mix: { low, mid, high, lowPct, midPct, highPct },
+      profileLine,
+      perfRows: rows,
+      perfSummary,
+      totalSettledByRisk,
     };
   }, [bets, normalizedProfit]);
 
+  /** ===== Confidence (revamped: insight-led + discipline + action) ===== */
+  const confidenceImpact = useMemo(() => {
+    type Agg = { n: number; wins: number; stakeSum: number; net: number };
+
+    const byK: Record<number, Agg> = {};
+    const add = (k: number, b: Bet) => {
+      byK[k] = byK[k] ?? { n: 0, wins: 0, stakeSum: 0, net: 0 };
+      byK[k].n += 1;
+      byK[k].wins += b.result === "win" ? 1 : 0;
+      byK[k].stakeSum += Number(b.stake ?? 0);
+      byK[k].net += normalizedProfit(b);
+    };
+
+    const confs: number[] = [];
+    const settledWithConf: Bet[] = [];
+
+    for (const b of settled) {
+      const raw = Number(b.confidence ?? 0);
+      if (!Number.isFinite(raw) || raw <= 0) continue;
+      const k = Math.max(1, Math.min(5, Math.round(raw)));
+      confs.push(k);
+      settledWithConf.push(b);
+      add(k, b);
+    }
+
+    const rowFor = (k: number) => {
+      const a = byK[k] ?? { n: 0, wins: 0, stakeSum: 0, net: 0 };
+      const winRate = a.n ? a.wins / a.n : 0;
+      const roi = a.stakeSum > 0 ? a.net / a.stakeSum : 0;
+      return { k, ...a, winRate, roi, label: `${k}/5 (${confidenceLabel(k)})` };
+    };
+
+    const rowsAll = [5, 4, 3, 2, 1].map(rowFor);
+    const rowsWithData = rowsAll.filter((r) => r.n > 0);
+
+    const groupAgg = (ks: number[]) => {
+      const g: Agg = { n: 0, wins: 0, stakeSum: 0, net: 0 };
+      for (const k of ks) {
+        const a = byK[k];
+        if (!a) continue;
+        g.n += a.n;
+        g.wins += a.wins;
+        g.stakeSum += a.stakeSum;
+        g.net += a.net;
+      }
+      const winRate = g.n ? g.wins / g.n : 0;
+      const roi = g.stakeSum > 0 ? g.net / g.stakeSum : 0;
+      return { ...g, winRate, roi };
+    };
+
+    const hi = groupAgg([4, 5]);
+    const lo = groupAgg([1, 2]);
+
+    const nConf = confs.length;
+    const avgConf = nConf ? confs.reduce((s, x) => s + x, 0) / nConf : null;
+    const medConf = nConf ? median(confs) : null;
+    const pctHigh = nConf ? confs.filter((x) => x >= 4).length / nConf : 0;
+    const pctLow = nConf ? confs.filter((x) => x <= 2).length / nConf : 0;
+
+    // Discipline label
+    let disciplineLabel = "Building";
+    let disciplineEmoji = "🟡";
+    let disciplineHint = "Log more confidence to sharpen your edge.";
+    if (nConf >= 8) {
+      if (pctHigh >= 0.6 && pctLow <= 0.2) {
+        disciplineLabel = "Strong discipline";
+        disciplineEmoji = "🟢";
+        disciplineHint = "You mostly bet when conviction is high.";
+      } else if (pctLow >= 0.35) {
+        disciplineLabel = "Impulse pattern";
+        disciplineEmoji = "🔴";
+        disciplineHint = "A lot of bets are low-conviction.";
+      } else {
+        disciplineLabel = "Mixed discipline";
+        disciplineEmoji = "🟡";
+        disciplineHint = "You mix high-conviction with some low-conviction bets.";
+      }
+    }
+
+    const winDiffPts = (hi.winRate - lo.winRate) * 100;
+
+    let headline = "Add confidence on bets to unlock your edge.";
+    let story = "Track confidence (1–5) to see what wins and what bleeds.";
+
+    const enoughHiLo = hi.n >= 5 && lo.n >= 5;
+    if (enoughHiLo) {
+      headline =
+        winDiffPts >= 25
+          ? `You win ${Math.round(winDiffPts)} pts more when confident (4–5).`
+          : winDiffPts <= -10
+          ? `Surprise: low-confidence (1–2) is beating high-confidence.`
+          : `High confidence is trending better than low confidence.`;
+
+      story = `High (4–5): ${pct(hi.winRate)} win • ROI ${pct(hi.roi)} • Net ${fmtMoney(hi.net, 0)}. Low (1–2): ${pct(lo.winRate)} win • ROI ${pct(
+        lo.roi
+      )} • Net ${fmtMoney(lo.net, 0)}.`;
+    } else if (hi.n >= 3) {
+      headline = `High confidence (4–5) is ${pct(hi.winRate)} win so far.`;
+      story = `Keep logging confidence — you need a few more bets for a reliable signal.`;
+    } else if (nConf > 0) {
+      headline = `You’ve logged confidence on ${nConf} settled bet${nConf === 1 ? "" : "s"}.`;
+      story = `Log a few more to get a real read on your edge by conviction.`;
+    }
+
+    const suggestions: string[] = [];
+    if (nConf < 5) {
+      suggestions.push("Log confidence on every bet for a week — patterns show up fast.");
+    } else {
+      if (lo.n >= 3 && lo.roi < 0) suggestions.push("Consider skipping bets at 1–2 confidence.");
+      if (hi.n >= 3 && hi.roi > 0) suggestions.push("When confidence is 4–5, your results look stronger — lean selective.");
+      if (pctLow >= 0.35) suggestions.push("Try a rule: no bet below 3 unless it’s pre-planned.");
+    }
+    if (!suggestions.length) suggestions.push("Keep going — more settled bets will make this insight sharper.");
+
+    const bestExact =
+      rowsWithData.length > 0
+        ? [...rowsWithData].sort((a, b) => (b.n >= 3 ? b.roi : -999) - (a.n >= 3 ? a.roi : -999))[0]?.k ?? null
+        : null;
+
+    return {
+      rowsAll,
+      rowsWithData,
+      hi,
+      lo,
+      headline,
+      story,
+      nConf,
+      avgConf,
+      medConf,
+      pctHigh,
+      pctLow,
+      disciplineEmoji,
+      disciplineLabel,
+      disciplineHint,
+      suggestions,
+      bestExact,
+    };
+  }, [settled, normalizedProfit]);
+
   const betTypeRows = useMemo(() => {
-    const map: Record<string, { total: number; wins: number; net: number; stakeSum: number }> = {};
-
-    for (const b of settledWithResult) {
+    const map: Record<string, { n: number; wins: number; net: number }> = {};
+    for (const b of settled) {
       const k = tidy(b.bet_type) || "Unknown";
-      map[k] = map[k] ?? { total: 0, wins: 0, net: 0, stakeSum: 0 };
-      map[k].total += 1;
+      map[k] = map[k] ?? { n: 0, wins: 0, net: 0 };
+      map[k].n += 1;
       map[k].wins += b.result === "win" ? 1 : 0;
-      map[k].stakeSum += Number(b.stake ?? 0);
       map[k].net += normalizedProfit(b);
     }
-
-    return Object.entries(map)
-      .map(([betType, v]) => ({
-        betType,
-        label: betType === "Unknown" ? "Unknown / not saved" : titleCase(betType),
-        total: v.total,
-        winRate: v.total ? v.wins / v.total : 0,
-        avgStake: v.total ? v.stakeSum / v.total : 0,
-        net: v.net,
-        roi: v.stakeSum > 0 ? v.net / v.stakeSum : 0,
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 8);
-  }, [settledWithResult, normalizedProfit]);
-
-  const sportRows = useMemo(() => {
-    const map: Record<string, { total: number; wins: number; net: number; stakeSum: number }> = {};
-
-    for (const b of settledWithResult) {
-      const k = tidy(b.sport) || "Unknown";
-      map[k] = map[k] ?? { total: 0, wins: 0, net: 0, stakeSum: 0 };
-      map[k].total += 1;
-      map[k].wins += b.result === "win" ? 1 : 0;
-      map[k].stakeSum += Number(b.stake ?? 0);
-      map[k].net += normalizedProfit(b);
-    }
-
-    return Object.entries(map)
-      .map(([sport, v]) => ({
-        sport,
-        label: sport === "Unknown" ? "Unknown / not saved" : titleCase(sport),
-        total: v.total,
-        winRate: v.total ? v.wins / v.total : 0,
-        avgStake: v.total ? v.stakeSum / v.total : 0,
-        net: v.net,
-        roi: v.stakeSum > 0 ? v.net / v.stakeSum : 0,
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 8);
-  }, [settledWithResult, normalizedProfit]);
-
-  const confidenceRows = useMemo(() => {
-    const map: Record<
-      string,
-      { total: number; wins: number; losses: number; pushes: number; net: number; stakeSum: number }
-    > = {};
-
-    const keyFor = (c?: number | null) => {
-      const n = Number(c);
-      if (!Number.isFinite(n) || n <= 0) return "Unknown";
-      const clamped = Math.max(1, Math.min(5, Math.round(n)));
-      return String(clamped);
-    };
-
-    for (const b of settledWithResult) {
-      const k = keyFor(b.confidence);
-      map[k] = map[k] ?? { total: 0, wins: 0, losses: 0, pushes: 0, net: 0, stakeSum: 0 };
-
-      map[k].total += 1;
-      map[k].wins += b.result === "win" ? 1 : 0;
-      map[k].losses += b.result === "loss" ? 1 : 0;
-      map[k].pushes += b.result === "push" ? 1 : 0;
-
-      map[k].stakeSum += Number(b.stake ?? 0);
-      map[k].net += normalizedProfit(b);
-    }
-
-    const labelFor = (k: string) => {
-      if (k === "Unknown") return "Unknown / not saved";
-      const n = Number(k);
-      return `${k} / 5 (${confidenceLabel(n)})`;
-    };
-
-    const sortKey = (k: string) => (k === "Unknown" ? -999 : Number(k));
-
     return Object.entries(map)
       .map(([k, v]) => ({
         key: k,
-        label: labelFor(k),
-        total: v.total,
-        winRate: v.total ? v.wins / v.total : 0,
-        avgStake: v.total ? v.stakeSum / v.total : 0,
+        label: k === "Unknown" ? "Unknown / not saved" : titleCase(k),
+        n: v.n,
+        winRate: v.n ? v.wins / v.n : 0,
         net: v.net,
-        roi: v.stakeSum > 0 ? v.net / v.stakeSum : 0,
-        wins: v.wins,
-        losses: v.losses,
-        pushes: v.pushes,
       }))
-      .sort((a, b) => sortKey(b.key) - sortKey(a.key));
-  }, [settledWithResult, normalizedProfit]);
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 8);
+  }, [settled, normalizedProfit]);
 
-  const topEmotionLabel = useMemo(() => {
-    const k = overall.topEmotion;
-    if (!k) return null;
-    return EMOTION_LABEL_BY_VALUE[k] ?? k;
-  }, [overall.topEmotion]);
+  const sportRows = useMemo(() => {
+    const map: Record<string, { n: number; wins: number; net: number }> = {};
+    for (const b of settled) {
+      const k = tidy(b.sport) || "Unknown";
+      map[k] = map[k] ?? { n: 0, wins: 0, net: 0 };
+      map[k].n += 1;
+      map[k].wins += b.result === "win" ? 1 : 0;
+      map[k].net += normalizedProfit(b);
+    }
+    return Object.entries(map)
+      .map(([k, v]) => ({
+        key: k,
+        label: k === "Unknown" ? "Unknown / not saved" : titleCase(k),
+        n: v.n,
+        winRate: v.n ? v.wins / v.n : 0,
+        net: v.net,
+      }))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 8);
+  }, [settled, normalizedProfit]);
 
-  const hasSettled = overall.total > 0;
-
-  const RangePills = (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-      {RANGE_OPTIONS.map((opt) => {
-        const active = opt.key === range;
-        return (
-          <Pressable
-            key={opt.key}
-            onPress={() => setRange(opt.key)}
-            style={{
-              paddingVertical: 8,
-              paddingHorizontal: 12,
-              borderRadius: 999,
-              borderWidth: 1,
-              borderColor: active ? Theme.text : Theme.border,
-              backgroundColor: active ? Theme.text : Theme.card,
-            }}
-          >
-            <Text
-              style={{
-                color: active ? Theme.bg : Theme.text,
-                fontWeight: "900",
-                fontSize: 12,
-                letterSpacing: 0.3,
-              }}
-            >
-              {opt.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
+  const snapshotInsight = useMemo(() => {
+    if (overall.total === 0) return "Settle a few bets and Insights will come alive.";
+    if (risk.mix.highPct >= 0.35 && overall.net < 0) return "High-risk betting is elevated and results are down.";
+    if (risk.mix.highPct >= 0.35 && overall.net >= 0) return "High-risk bets are elevated — and currently paying off.";
+    if (risk.mix.lowPct >= 0.75 && overall.net >= 0) return "You’re keeping risk low and staying positive.";
+    if (overall.winRate >= 0.6) return "Strong stretch — keep doing what’s working.";
+    if (overall.winRate <= 0.35) return "Rough stretch — consider tightening confidence + risk.";
+    return "Steady results — look at confidence and risk for patterns.";
+  }, [overall.total, overall.net, overall.winRate, risk.mix.highPct, risk.mix.lowPct]);
 
   if (loading) {
     return (
@@ -743,337 +961,414 @@ export default function InsightsScreen() {
     );
   }
 
-  const compareLine =
-    deltas.canCompare && hasSettled
-      ? `vs previous ${daysForRange(range)} days: Net ${
-          (deltas.netDeltaPct ?? 0) >= 0 ? "↑" : "↓"
-        } ${pct(Math.abs(deltas.netDeltaPct ?? 0))} • Win ${
-          (deltas.winDeltaPts ?? 0) >= 0 ? "↑" : "↓"
-        } ${Math.round(Math.abs((deltas.winDeltaPts ?? 0) * 100))} pts`
-      : null;
-
-  // Risk score label for KPI
-  const avgRiskLabel = (() => {
-    const x = risk.avgScore;
-    if (x >= 2.6) return "High";
-    if (x >= 1.6) return "Mixed";
-    if (x >= 0.8) return "Low";
-    return "Very low";
-  })();
+  const hasSettled = overall.total > 0;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg }}>
       <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }}>
         <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>Insights</Text>
+        <Text style={{ color: Theme.sub, fontWeight: "800", marginTop: -6 }}>{rangeLabel(range)}</Text>
+        <PillRow range={range} setRange={setRange} />
+        {compareLine ? <DeltaPill text={compareLine} /> : null}
 
-        <Text style={{ color: Theme.sub, fontWeight: "800", marginTop: -6 }}>
-          {rangeLabel(range)}
-        </Text>
+        {/* Snapshot */}
+        <Card title="Snapshot" subtitle={snapshotInsight}>
+          <View style={{ gap: 10 }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" }}>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Net profit</Text>
+              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 12 }}>
+                {hasSettled ? `${overall.total} settled` : "0 settled"}
+              </Text>
+            </View>
 
-        {RangePills}
+            <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 34, letterSpacing: -0.5 }}>
+              {hasSettled ? fmtMoney(overall.net, 0) : "—"}
+            </Text>
 
-        {compareLine ? (
-          <View
+            <View style={{ flexDirection: "row", gap: 12 }}>
+              <StatTile
+                title="Win rate"
+                value={hasSettled ? pct(overall.winRate) : "—"}
+                sub={
+                  hasSettled
+                    ? `${overall.wins}W–${overall.losses}L${overall.pushes ? `–${overall.pushes}P` : ""}`
+                    : "No settled bets yet"
+                }
+              />
+              <StatTile
+                title="ROI"
+                value={hasSettled ? pct(overall.roi) : "—"}
+                sub={hasSettled ? `Staked ${fmtMoney(overall.totalStakedSettled, 0)}` : "Settle bets to see ROI"}
+              />
+            </View>
+          </View>
+        </Card>
+
+        {/* Risk Profile (core always visible; breakdown collapsible) */}
+        <Card title="Your risk profile" subtitle="Built based on your emotional state at the time of logging your bets.">
+          <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18, lineHeight: 22 }}>{risk.profileLine}</Text>
+
+          {/* core: donut + mix */}
+          <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
+            <DonutRing highPct={risk.mix.highPct} midPct={risk.mix.midPct} lowPct={risk.mix.lowPct} />
+
+            <View style={{ flex: 1, gap: 10 }}>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Bets by risk level</Text>
+
+              <View style={{ gap: 10 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>🔴 High</Text>
+                  <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+                    {risk.mix.high} <Text style={{ color: Theme.sub, fontWeight: "900" }}>({pct(risk.mix.highPct)})</Text>
+                  </Text>
+                </View>
+
+                <View style={{ height: 1, backgroundColor: Theme.border, opacity: 0.8 }} />
+
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>🟡 Mid</Text>
+                  <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+                    {risk.mix.mid} <Text style={{ color: Theme.sub, fontWeight: "900" }}>({pct(risk.mix.midPct)})</Text>
+                  </Text>
+                </View>
+
+                <View style={{ height: 1, backgroundColor: Theme.border, opacity: 0.8 }} />
+
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>🟢 Low</Text>
+                  <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+                    {risk.mix.low} <Text style={{ color: Theme.sub, fontWeight: "900" }}>({pct(risk.mix.lowPct)})</Text>
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {/* core: summary line always visible */}
+          <View style={{ marginTop: 10, gap: 8 }}>
+            <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>Performance by risk level</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "800", lineHeight: 18 }}>{risk.perfSummary}</Text>
+
+            {/* breakdown toggle */}
+            <SectionToggle
+              open={openRiskBreakdown}
+              onPress={() => setOpenRiskBreakdown((v) => !v)}
+              label={openRiskBreakdown ? "Hide breakdown" : "Show breakdown"}
+              hint={!hasSettled ? "Settle bets to populate the breakdown." : `Shows win rate, ROI, and net by risk bucket.`}
+            />
+
+            {/* breakdown content */}
+            {openRiskBreakdown ? (
+              !hasSettled ? (
+                <Text style={{ color: Theme.sub, fontWeight: "800" }}>No settled bets yet.</Text>
+              ) : (
+                <View style={{ gap: 14, marginTop: 6 }}>
+                  {risk.perfRows.map((r) => {
+                    const label = r.level === "high" ? "🔴 High risk" : r.level === "mid" ? "🟡 Mid risk" : "🟢 Low risk";
+                    return (
+                      <View key={r.level} style={{ gap: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: Theme.border }}>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                          <Text style={{ color: Theme.text, fontWeight: "900" }}>{label}</Text>
+                          <Text style={{ color: Theme.sub, fontWeight: "900" }}>n={r.n}</Text>
+                        </View>
+                        <Bar
+                          value={r.winRate}
+                          labelLeft={`Win ${pct(r.winRate)} (${r.wins}W)`}
+                          labelRight={`Avg ${r.n ? fmtMoney(r.avgStake, 0) : "$0"}`}
+                        />
+                        <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                            Net: <Text style={{ color: Theme.text, fontWeight: "900" }}>{fmtMoney(r.net, 0)}</Text>
+                          </Text>
+                          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
+                            ROI: <Text style={{ color: Theme.text, fontWeight: "900" }}>{pct(r.roi)}</Text>
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )
+            ) : null}
+          </View>
+        </Card>
+
+        {/* Confidence edge (core always visible; exact breakdown collapsible) */}
+        <Card title="Confidence edge" subtitle="Your conviction level is one of your strongest discipline signals.">
+          {!hasSettled ? (
+            <Text style={{ color: Theme.sub, fontWeight: "800" }}>No settled bets yet.</Text>
+          ) : confidenceImpact.nConf === 0 ? (
+            <View style={{ gap: 10 }}>
+              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18, lineHeight: 22 }}>
+                Add confidence to unlock your edge.
+              </Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800", lineHeight: 18 }}>
+                Start logging confidence (1–5) when you place a bet. This section will show exactly what “you know ball” looks like in your
+                results.
+              </Text>
+            </View>
+          ) : (
+            <View style={{ gap: 12 }}>
+              {/* core: headline takeaway */}
+              <View
+                style={{
+                  backgroundColor: Theme.bg,
+                  borderWidth: 1,
+                  borderColor: Theme.border,
+                  borderRadius: 16,
+                  padding: 12,
+                  gap: 10,
+                }}
+              >
+                <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18, lineHeight: 22 }}>{confidenceImpact.headline}</Text>
+                <Text style={{ color: Theme.sub, fontWeight: "800", lineHeight: 18 }}>{confidenceImpact.story}</Text>
+
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  <TinyPill text={`Logged: ${confidenceImpact.nConf} bet${confidenceImpact.nConf === 1 ? "" : "s"}`} />
+                  <TinyPill text={`Avg: ${confidenceImpact.avgConf ? confidenceImpact.avgConf.toFixed(1) : "—"}/5`} />
+                  <TinyPill text={`Median: ${confidenceImpact.medConf != null ? String(confidenceImpact.medConf) : "—"}/5`} />
+                  <TinyPill text={`% ≥4: ${pct(confidenceImpact.pctHigh)}`} />
+                  <TinyPill text={`% ≤2: ${pct(confidenceImpact.pctLow)}`} />
+                </View>
+              </View>
+
+              {/* core: big tiles (explicit win rate) */}
+              <View style={{ flexDirection: "row", gap: 12 }}>
+                <StatTile
+                  title="High confidence (4–5)"
+                  emoji="🔥"
+                  value={confidenceImpact.hi.n ? `Win ${pct(confidenceImpact.hi.winRate)}` : "—"}
+                  sub={
+                    confidenceImpact.hi.n
+                      ? `ROI ${pct(confidenceImpact.hi.roi)} • Net ${fmtMoney(confidenceImpact.hi.net, 0)} • n=${confidenceImpact.hi.n}`
+                      : "Not enough data"
+                  }
+                />
+                <StatTile
+                  title="Low confidence (1–2)"
+                  emoji="🧊"
+                  value={confidenceImpact.lo.n ? `Win ${pct(confidenceImpact.lo.winRate)}` : "—"}
+                  sub={
+                    confidenceImpact.lo.n
+                      ? `ROI ${pct(confidenceImpact.lo.roi)} • Net ${fmtMoney(confidenceImpact.lo.net, 0)} • n=${confidenceImpact.lo.n}`
+                      : "Not enough data"
+                  }
+                />
+              </View>
+
+              {/* core: discipline + action */}
+              <View
+                style={{
+                  backgroundColor: Theme.bg,
+                  borderWidth: 1,
+                  borderColor: Theme.border,
+                  borderRadius: 16,
+                  padding: 12,
+                  gap: 8,
+                }}
+              >
+                <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>DISCIPLINE</Text>
+                <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 18 }}>
+                  {confidenceImpact.disciplineEmoji} {confidenceImpact.disciplineLabel}
+                </Text>
+                <Text style={{ color: Theme.sub, fontWeight: "800", lineHeight: 18 }}>{confidenceImpact.disciplineHint}</Text>
+              </View>
+
+              <View
+                style={{
+                  backgroundColor: Theme.bg,
+                  borderWidth: 1,
+                  borderColor: Theme.border,
+                  borderRadius: 16,
+                  padding: 12,
+                  gap: 8,
+                }}
+              >
+                <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>WHAT TO DO NEXT</Text>
+                {confidenceImpact.suggestions.slice(0, 3).map((s, i) => (
+                  <Text key={i} style={{ color: Theme.text, fontWeight: "800", lineHeight: 18 }}>
+                    • {s}
+                  </Text>
+                ))}
+              </View>
+
+              {/* breakdown toggle */}
+              <SectionToggle
+                open={openConfidenceBreakdown}
+                onPress={() => setOpenConfidenceBreakdown((v) => !v)}
+                label={openConfidenceBreakdown ? "Hide exact confidence breakdown" : "Show exact confidence breakdown"}
+                hint={openConfidenceBreakdown ? "Win rate + ROI + net for each confidence level." : "See 1/5 through 5/5 performance."}
+              />
+
+              {/* breakdown content */}
+              {openConfidenceBreakdown ? (
+                <View style={{ gap: 10, marginTop: 6 }}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>By exact confidence</Text>
+                    <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+                      best: {confidenceImpact.bestExact ? `${confidenceImpact.bestExact}/5` : "—"}
+                    </Text>
+                  </View>
+
+                  {confidenceImpact.rowsAll.map((r) => {
+                    const has = r.n > 0;
+                    const highlighted = confidenceImpact.bestExact === r.k && r.n >= 3;
+                    return (
+                      <View
+                        key={r.k}
+                        style={{
+                          gap: 8,
+                          padding: 12,
+                          borderRadius: 16,
+                          borderWidth: 1,
+                          borderColor: highlighted ? Theme.text : Theme.border,
+                          backgroundColor: Theme.bg,
+                        }}
+                      >
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <StarsRow k={r.k} />
+                          <Text style={{ color: Theme.sub, fontWeight: "900" }}>{has ? `n=${r.n}` : "—"}</Text>
+                        </View>
+
+                        {has ? (
+                          <>
+                            <Bar value={r.winRate} labelLeft={`Win ${pct(r.winRate)}`} labelRight={`ROI ${pct(r.roi)}`} />
+                            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
+                              Net <Text style={{ color: Theme.text, fontWeight: "900" }}>{fmtMoney(r.net, 0)}</Text> • Staked{" "}
+                              <Text style={{ color: Theme.text, fontWeight: "900" }}>{fmtMoney(r.stakeSum, 0)}</Text>
+                            </Text>
+                          </>
+                        ) : (
+                          <Text style={{ color: Theme.sub, fontWeight: "800" }}>Not enough data</Text>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </View>
+          )}
+        </Card>
+
+        {/* Details (kept collapsible) */}
+        <View
+          style={{
+            backgroundColor: Theme.card,
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: Theme.border,
+            overflow: "hidden",
+          }}
+        >
+          <Pressable
+            onPress={() => setOpenDetails((v) => !v)}
             style={{
-              marginTop: 6,
-              padding: 12,
-              borderRadius: 14,
-              borderWidth: 1,
-              borderColor: Theme.border,
-              backgroundColor: Theme.card,
+              padding: 14,
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 10,
             }}
           >
-            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{compareLine}</Text>
-          </View>
-        ) : null}
+            <View style={{ flex: 1, gap: 4 }}>
+              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>Performance details</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>Tap to drill into bet type and sport.</Text>
+            </View>
+            <Text style={{ color: Theme.sub, fontWeight: "900" }}>{openDetails ? "▲" : "▼"}</Text>
+          </Pressable>
 
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-          <StatCard
-            label="Win rate"
-            value={hasSettled ? pct(overall.winRate) : "—"}
-            sub={
-              hasSettled
-                ? `${overall.wins}W–${overall.losses}L${overall.pushes ? `–${overall.pushes}P` : ""}`
-                : "No settled bets yet"
-            }
-          />
-          <StatCard
-            label="Net profit"
-            value={hasSettled ? fmtMoney(overall.net) : "—"}
-            sub={hasSettled ? `ROI ${pct(overall.roi)}` : "Settle bets to see ROI"}
-          />
-          <StatCard
-            label="Avg stake"
-            value={hasSettled ? fmtMoney(overall.avgStake) : "—"}
-            sub={`${overall.openCount} open • ${overall.totalCount} total`}
-          />
-          <StatCard label="Most common vibe" value={topEmotionLabel ?? "—"} sub="Across logged bets" />
-        </View>
+          {openDetails ? (
+            <View style={{ padding: 14, paddingTop: 6, borderTopWidth: 1, borderTopColor: Theme.border, gap: 12 }}>
+              {/* By bet type */}
+              <View
+                style={{
+                  backgroundColor: Theme.bg,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: Theme.border,
+                  overflow: "hidden",
+                }}
+              >
+                <Pressable
+                  onPress={() => setOpenBetType((v) => !v)}
+                  style={{ padding: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}
+                >
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={{ color: Theme.text, fontWeight: "900" }}>By bet type</Text>
+                    <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
+                      {betTypeRows.length
+                        ? `Top: ${betTypeRows[0].label} • ${pct(betTypeRows[0].winRate)} • Net ${fmtMoney(betTypeRows[0].net, 0)}`
+                        : "No settled bets yet."}
+                    </Text>
+                  </View>
+                  <Text style={{ color: Theme.sub, fontWeight: "900" }}>{openBetType ? "▲" : "▼"}</Text>
+                </Pressable>
 
-        <Section title="Performance">
-          {hasSettled ? (
-            <>
-              <Text style={{ color: Theme.sub, fontWeight: "800" }}>Win rate</Text>
-              <Bar
-                value={overall.winRate}
-                labelLeft={`${overall.wins} wins`}
-                labelRight={`${overall.losses} losses`}
-              />
-              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                  Settled: <Text style={{ color: Theme.text, fontWeight: "900" }}>{overall.total}</Text>
-                </Text>
-                <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                  Total staked:{" "}
-                  <Text style={{ color: Theme.text, fontWeight: "900" }}>
-                    {fmtMoney(overall.totalStakedSettled)}
-                  </Text>
-                </Text>
+                {openBetType ? (
+                  <View style={{ padding: 12, paddingTop: 0, gap: 12 }}>
+                    {betTypeRows.length === 0 ? (
+                      <Text style={{ color: Theme.sub, fontWeight: "800" }}>No data yet.</Text>
+                    ) : (
+                      betTypeRows.map((r) => (
+                        <View key={r.key} style={{ gap: 6 }}>
+                          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                            <Text style={{ color: Theme.text, fontWeight: "900" }}>{r.label}</Text>
+                            <Text style={{ color: Theme.sub, fontWeight: "900" }}>n={r.n}</Text>
+                          </View>
+                          <Bar value={r.winRate} labelLeft={`Win ${pct(r.winRate)}`} labelRight={`Net ${fmtMoney(r.net, 0)}`} />
+                        </View>
+                      ))
+                    )}
+                  </View>
+                ) : null}
               </View>
-            </>
-          ) : (
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-              Settle a few bets and this section will come alive.
-            </Text>
-          )}
-        </Section>
 
-        <Section title="Results by confidence">
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            How you perform at each confidence level (settled bets)
-          </Text>
-
-          {!hasSettled ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>No settled bets yet.</Text>
-          ) : confidenceRows.length === 0 ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-              No settled bets with confidence saved yet.
-            </Text>
-          ) : (
-            <View style={{ gap: 12 }}>
-              {confidenceRows.map((r) => (
-                <View
-                  key={r.key}
-                  style={{
-                    paddingTop: 10,
-                    borderTopWidth: 1,
-                    borderTopColor: Theme.border,
-                    gap: 8,
-                  }}
+              {/* By sport */}
+              <View
+                style={{
+                  backgroundColor: Theme.bg,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: Theme.border,
+                  overflow: "hidden",
+                }}
+              >
+                <Pressable
+                  onPress={() => setOpenSport((v) => !v)}
+                  style={{ padding: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}
                 >
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: Theme.text, fontWeight: "900" }}>{r.label}</Text>
-                    <Text style={{ color: Theme.sub, fontWeight: "800" }}>n={r.total}</Text>
-                  </View>
-
-                  <Bar
-                    value={r.winRate}
-                    labelLeft={`Win ${pct(r.winRate)} (${r.wins}W${
-                      r.losses ? `–${r.losses}L` : ""
-                    }${r.pushes ? `–${r.pushes}P` : ""})`}
-                    labelRight={`Avg ${fmtMoney(r.avgStake)}`}
-                  />
-
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                      Net: <Text style={{ color: Theme.text, fontWeight: "900" }}>{fmtMoney(r.net)}</Text>
-                    </Text>
-                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                      ROI: <Text style={{ color: Theme.text, fontWeight: "900" }}>{pct(r.roi)}</Text>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={{ color: Theme.text, fontWeight: "900" }}>By sport</Text>
+                    <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
+                      {sportRows.length
+                        ? `Top: ${sportRows[0].label} • ${pct(sportRows[0].winRate)} • Net ${fmtMoney(sportRows[0].net, 0)}`
+                        : "No settled bets yet."}
                     </Text>
                   </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </Section>
+                  <Text style={{ color: Theme.sub, fontWeight: "900" }}>{openSport ? "▲" : "▼"}</Text>
+                </Pressable>
 
-        {/* ===================== RISK MIX (UPDATED) ===================== */}
-        <Section title="Risk mix">
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            Built from your emotion groups (Strategic=0, Recreational=1, Situational=2, Reactive=3). Each bet’s risk score
-            is the max of its selected emotions.
-          </Text>
-
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-            <StatCard
-              label="Avg risk score"
-              value={`${risk.avgScore.toFixed(2)} / 3`}
-              sub={avgRiskLabel}
-            />
-            <StatCard
-              label="High-risk bets"
-              value={pct(risk.mix.highPct)}
-              sub={`${risk.mix.high} of ${bets.length}`}
-            />
-            <StatCard
-              label="Mid-risk bets"
-              value={pct(risk.mix.midPct)}
-              sub={`${risk.mix.mid} of ${bets.length}`}
-            />
-            <StatCard
-              label="Low-risk bets"
-              value={pct(risk.mix.lowPct)}
-              sub={`${risk.mix.low} of ${bets.length}`}
-            />
-          </View>
-
-          <View style={{ gap: 10 }}>
-            <View style={{ gap: 6 }}>
-              <Text style={{ color: Theme.text, fontWeight: "900" }}>
-                🔴 High: {pct(risk.mix.highPct)}
-              </Text>
-              <Bar value={risk.mix.highPct} />
-            </View>
-            <View style={{ gap: 6 }}>
-              <Text style={{ color: Theme.text, fontWeight: "900" }}>
-                🟡 Mid: {pct(risk.mix.midPct)}
-              </Text>
-              <Bar value={risk.mix.midPct} />
-            </View>
-            <View style={{ gap: 6 }}>
-              <Text style={{ color: Theme.text, fontWeight: "900" }}>
-                🟢 Low: {pct(risk.mix.lowPct)}
-              </Text>
-              <Bar value={risk.mix.lowPct} />
-            </View>
-          </View>
-
-          <View style={{ height: 6 }} />
-
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            Performance by risk level (settled bets)
-          </Text>
-
-          {!hasSettled ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>No settled bets yet.</Text>
-          ) : (
-            <View style={{ gap: 12 }}>
-              {risk.perfRows.map((r) => {
-                const title =
-                  r.level === "high" ? "🔴 High risk" : r.level === "mid" ? "🟡 Mid risk" : "🟢 Low risk";
-
-                return (
-                  <View
-                    key={r.level}
-                    style={{
-                      paddingTop: 10,
-                      borderTopWidth: 1,
-                      borderTopColor: Theme.border,
-                      gap: 8,
-                    }}
-                  >
-                    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                      <Text style={{ color: Theme.text, fontWeight: "900" }}>{title}</Text>
-                      <Text style={{ color: Theme.sub, fontWeight: "800" }}>n={r.n}</Text>
-                    </View>
-
-                    <Bar
-                      value={r.winRate}
-                      labelLeft={`Win ${pct(r.winRate)} (${r.wins}W)`}
-                      labelRight={`Avg ${fmtMoney(r.avgStake)}`}
-                    />
-
-                    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                      <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                        Net: <Text style={{ color: Theme.text, fontWeight: "900" }}>{fmtMoney(r.net)}</Text>
-                      </Text>
-                      <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                        ROI: <Text style={{ color: Theme.text, fontWeight: "900" }}>{pct(r.roi)}</Text>
-                      </Text>
-                    </View>
+                {openSport ? (
+                  <View style={{ padding: 12, paddingTop: 0, gap: 12 }}>
+                    {sportRows.length === 0 ? (
+                      <Text style={{ color: Theme.sub, fontWeight: "800" }}>No data yet.</Text>
+                    ) : (
+                      sportRows.map((r) => (
+                        <View key={r.key} style={{ gap: 6 }}>
+                          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                            <Text style={{ color: Theme.text, fontWeight: "900" }}>{r.label}</Text>
+                            <Text style={{ color: Theme.sub, fontWeight: "900" }}>n={r.n}</Text>
+                          </View>
+                          <Bar value={r.winRate} labelLeft={`Win ${pct(r.winRate)}`} labelRight={`Net ${fmtMoney(r.net, 0)}`} />
+                        </View>
+                      ))
+                    )}
                   </View>
-                );
-              })}
+                ) : null}
+              </View>
             </View>
-          )}
-        </Section>
-
-        <Section title="By bet type (top)">
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            How different bet types perform (settled bets)
-          </Text>
-          {betTypeRows.length === 0 ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>No settled bets yet.</Text>
-          ) : (
-            <View style={{ gap: 12 }}>
-              {betTypeRows.map((r) => (
-                <View
-                  key={r.betType}
-                  style={{
-                    paddingTop: 10,
-                    borderTopWidth: 1,
-                    borderTopColor: Theme.border,
-                    gap: 8,
-                  }}
-                >
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: Theme.text, fontWeight: "900" }}>{r.label}</Text>
-                    <Text style={{ color: Theme.sub, fontWeight: "800" }}>n={r.total}</Text>
-                  </View>
-
-                  <Bar
-                    value={r.winRate}
-                    labelLeft={`Win ${pct(r.winRate)}`}
-                    labelRight={`Avg ${fmtMoney(r.avgStake)}`}
-                  />
-
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                      Net: <Text style={{ color: Theme.text, fontWeight: "900" }}>{fmtMoney(r.net)}</Text>
-                    </Text>
-                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                      ROI: <Text style={{ color: Theme.text, fontWeight: "900" }}>{pct(r.roi)}</Text>
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </Section>
-
-        <Section title="By sport (top)">
-          <Text style={{ color: Theme.sub, fontWeight: "800" }}>
-            How you perform across sports (settled bets)
-          </Text>
-          {sportRows.length === 0 ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>No settled bets yet.</Text>
-          ) : (
-            <View style={{ gap: 12 }}>
-              {sportRows.map((r) => (
-                <View
-                  key={r.sport}
-                  style={{
-                    paddingTop: 10,
-                    borderTopWidth: 1,
-                    borderTopColor: Theme.border,
-                    gap: 8,
-                  }}
-                >
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: Theme.text, fontWeight: "900" }}>{r.label}</Text>
-                    <Text style={{ color: Theme.sub, fontWeight: "800" }}>n={r.total}</Text>
-                  </View>
-
-                  <Bar
-                    value={r.winRate}
-                    labelLeft={`Win ${pct(r.winRate)}`}
-                    labelRight={`Avg ${fmtMoney(r.avgStake)}`}
-                  />
-
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                      Net: <Text style={{ color: Theme.text, fontWeight: "900" }}>{fmtMoney(r.net)}</Text>
-                    </Text>
-                    <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-                      ROI: <Text style={{ color: Theme.text, fontWeight: "900" }}>{pct(r.roi)}</Text>
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </Section>
+          ) : null}
+        </View>
 
         <View style={{ height: 8 }} />
       </ScrollView>
