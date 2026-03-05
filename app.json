@@ -8,25 +8,31 @@
     "scheme": "tiltcheck",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fordcroft.tiltcheck",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
-
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/appicon.png",
         "backgroundColor": "#000000"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.fordcroft.tiltcheck",
+      "versionCode": 1
     },
-
     "web": {
       "output": "static",
       "favicon": "./assets/appicon.png"
     },
-
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "plugins": [
       "expo-router",
       [
@@ -44,10 +50,16 @@
       "expo-secure-store",
       "@react-native-community/datetimepicker"
     ],
-
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d22ea589-1a0e-42db-a656-80190fd512c1"
+      }
+    },
+    "owner": "fordcroft"
   }
 }

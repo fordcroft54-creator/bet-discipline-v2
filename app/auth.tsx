@@ -163,13 +163,14 @@ export default function AuthEntryScreen() {
         <Text
           style={{
             color: Theme.sub,
-            fontSize: 14,
+            fontSize: 16,
             textAlign: "center",
             lineHeight: 18
           }}
         >
-          Tilt Check helps you track bets, confidence, and emotions so you can
-          understand your betting habits and avoid betting on tilt.
+          Track your bets. 
+          Understand your habits. {"\n"}
+          Avoid betting on tilt.
         </Text>
 
       </FormScreen>

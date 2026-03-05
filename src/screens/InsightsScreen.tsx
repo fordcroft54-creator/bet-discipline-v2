@@ -29,6 +29,49 @@ function tidy(s?: string | null) {
   return String(s).replace(/\s+/g, " ").trim();
 }
 
+function insightTone(s: string) {
+  const t = s.toLowerCase();
+  if (t.includes("rough") || t.includes("down") || t.includes("elevated") || t.includes("warning"))
+    return { icon: "⚠️", accent: Theme.warn };
+  if (t.includes("strong") || t.includes("positive") || t.includes("paying off"))
+    return { icon: "✅", accent: Theme.ok };
+  return { icon: "👀", accent: Theme.sub };
+}
+
+function InsightCallout({ text }: { text: string }) {
+  const tone = insightTone(text);
+  return (
+    <View
+      style={{
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: Theme.border,
+        backgroundColor: Theme.bg,
+        padding: 12,
+        flexDirection: "row",
+        gap: 10,
+        alignItems: "flex-start",
+      }}
+    >
+      {/* left accent */}
+      <View
+        style={{
+          width: 4,
+          alignSelf: "stretch",
+          borderRadius: 999,
+          backgroundColor: tone.accent,
+          opacity: 0.9,
+        }}
+      />
+      <Text style={{ fontSize: 16, lineHeight: 20 }}>
+        <Text style={{ color: Theme.text, fontWeight: "900" }}>
+          {tone.icon} {text}
+        </Text>
+      </Text>
+    </View>
+  );
+}
+
 function titleCase(s: string) {
   const t = tidy(s);
   if (!t) return "";
@@ -989,7 +1032,8 @@ export default function InsightsScreen() {
         {compareLine ? <DeltaPill text={compareLine} /> : null}
 
         {/* Snapshot */}
-        <Card title="Snapshot" subtitle={snapshotInsight}>
+        <Card title="Snapshot">
+  <InsightCallout text={snapshotInsight} />
           <View style={{ gap: 10 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" }}>
               <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Net profit</Text>

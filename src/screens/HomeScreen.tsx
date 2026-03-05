@@ -54,7 +54,6 @@ function moneySigned(n: number) {
   return `${sign}$${Math.round(Math.abs(n)).toLocaleString()}`;
 }
 
-// Prefer placed_at for week/day guardrails; fallback to created_at
 function betAnchorDate(b: Bet) {
   return asDate(b.placed_at) ?? asDate(b.created_at);
 }
@@ -91,6 +90,45 @@ const EMOTION_RISK: Record<string, number> = {
   desperate: 15,
 };
 
+function prettyDriver(s: string) {
+  const map: Record<string, string> = {
+    chasing_losses: "Chasing losses",
+    tilted: "Tilted",
+    desperate: "Desperate",
+    doubling_down: "Doubling down",
+    revenge: "Revenge betting",
+    bored: "Bored / idle",
+    fomo: "FOMO",
+    impulsive: "Impulse",
+    stressed: "Stressed",
+    drinking: "Drinking",
+    fun: "Just for fun",
+    social: "Social / with friends",
+    habit: "Habit / routine",
+    confident: "Confident",
+    research: "Research-based",
+    system: "System play",
+    pre_planned: "Pre-planned",
+  };
+  return map[s] ?? s.replace(/_/g, " ");
+}
+
+function tiltRiskLevel(score: number) {
+  // Plain-language labels instead of “39/100” dominating the UI
+  if (score >= 75) return { level: "Severe", color: Theme.danger };
+  if (score >= 50) return { level: "High", color: Theme.warn };
+  if (score >= 25) return { level: "Moderate", color: Theme.warn };
+  return { level: "Low", color: Theme.ok };
+}
+
+function statusCopy(score: number) {
+  // Make “Watchlist” self-explanatory
+  if (score >= 75) return "You’re at high risk of tilt. Tighten guardrails now.";
+  if (score >= 50) return "Warning zone — slow down and protect your budget.";
+  if (score >= 25) return "Keep an eye on it — you’re trending toward tilt.";
+  return "Looks steady — stay within your guardrails.";
+}
+
 function computeTiltRisk(args: {
   goals: { weeklyBudget: number; monthlyLossCap: number; maxBet: number };
   weeklyWagered: number;
@@ -121,7 +159,7 @@ function computeTiltRisk(args: {
   const perfScale = weeklyBudget > 0 ? weeklyBudget : Math.max(weeklyWagered, 100);
   const perfPts = netProfitWeek < 0 ? clamp((-netProfitWeek / perfScale) * 15, 0, 15) : 0;
 
-  // D) Emotion risk (0–15) from recent selections (emotions array preferred)
+  // D) Emotion risk (0–15)
   const emotionSamples = recentBets.flatMap((b) => {
     const arr = (b.emotions && b.emotions.length
       ? b.emotions
@@ -144,8 +182,8 @@ function computeTiltRisk(args: {
   const mismatchAvg =
     recentBets.length > 0
       ? recentBets.reduce((sum, b) => {
-          const conf = clamp(Number(b.confidence ?? 3), 1, 5); // 1..5
-          const confNorm = (conf - 1) / 4; // 0..1 (higher is better)
+          const conf = clamp(Number(b.confidence ?? 3), 1, 5);
+          const confNorm = (conf - 1) / 4; // 0..1
           const stakePct = clamp((b.stake || 0) / denom, 0, 1.5);
           const mismatch = (1 - confNorm) * stakePct;
           return sum + mismatch;
@@ -154,7 +192,6 @@ function computeTiltRisk(args: {
 
   const confidencePts = clamp(mismatchAvg * 10, 0, 10);
 
-  // --- Optional "coach-y" kicker: reactive emotions + high weekly pressure => at least Watchlist ---
   const hasReactive = emotionSamples.some((e) =>
     ["chasing_losses", "tilted", "desperate", "doubling_down", "revenge"].includes(e)
   );
@@ -166,34 +203,35 @@ function computeTiltRisk(args: {
 
   if (weeklyBudget > 0) {
     if (weeklyWagered > weeklyBudget) reasons.push(`Over weekly budget by ${money(weeklyWagered - weeklyBudget)}`);
-    else reasons.push(`${money(Math.max(0, weeklyBudget - weeklyWagered))} left in weekly budget`);
+    else reasons.push(`${money(Math.max(0, weeklyBudget - weeklyWagered))} wager budget left this week`);
   } else {
-    reasons.push("Set a weekly budget to track guardrails");
+    reasons.push("Set a weekly budget to activate guardrails");
   }
 
   if (monthlyCap > 0) {
-    if (monthlyLosses > monthlyCap) reasons.push(`Over monthly loss cap by ${money(monthlyLosses - monthlyCap)}`);
-    else reasons.push(`${money(Math.max(0, monthlyCap - monthlyLosses))} left in monthly loss cap`);
+    if (monthlyLosses > monthlyCap) reasons.push(`Over loss cap by ${money(monthlyLosses - monthlyCap)}`);
+    else reasons.push(`${money(Math.max(0, monthlyCap - monthlyLosses))} left in loss cap`);
   }
 
   if (emotionSamples.length) {
     const worst = [...emotionSamples].sort((a, b) => (EMOTION_RISK[b] ?? 0) - (EMOTION_RISK[a] ?? 0))[0];
-    if (worst) reasons.push(`Recent driver: ${worst.replace(/_/g, " ")}`);
+    if (worst) reasons.push(`Recent driver: ${prettyDriver(worst)}`);
   }
 
   if (netProfitWeek < 0) reasons.push(`Down ${money(Math.abs(netProfitWeek))} this week`);
 
+  // Label = status label (keep your vibe, but clearer)
   const label =
     score >= 75 ? "Lock It Down 🛑" :
-    score >= 50 ? "On Tilt ⚠️" :
+    score >= 50 ? "Tilt Risk ⚠️" :
     score >= 25 ? "Watchlist 👀" :
-    "In Control ✅";
+    "Disciplined ✅";
 
   const dotColor =
     score >= 75 ? Theme.danger :
     score >= 50 ? Theme.warn :
     score >= 25 ? Theme.warn :
-    "#22C55E";
+    Theme.ok;
 
   return { score, label, dotColor, reasons: reasons.slice(0, 3) };
 }
@@ -222,7 +260,6 @@ export default function HomeScreen() {
       const since = new Date();
       since.setDate(since.getDate() - 90);
 
-      // ✅ Pull fields needed for stronger Discipline Status + placed_at-based guardrails
       const b = await supabase
         .from("bets")
         .select("stake,status,result,profit,emotion,emotions,confidence,created_at,placed_at,settled_at")
@@ -255,7 +292,6 @@ export default function HomeScreen() {
   const weekStart = useMemo(() => startOfWeek(), []);
   const monthStart = useMemo(() => startOfMonth(), []);
 
-  // ✅ This week is based on placed_at (fallback created_at)
   const weekBets = useMemo(() => {
     return bets.filter((b) => {
       const d = betAnchorDate(b);
@@ -264,7 +300,6 @@ export default function HomeScreen() {
     });
   }, [bets, weekStart]);
 
-  // Settled (week/month) stays based on settled_at when available; fallback to placed_at/created_at
   const weekSettled = useMemo(() => {
     return bets.filter((b) => {
       if (b.status !== "settled") return false;
@@ -297,7 +332,6 @@ export default function HomeScreen() {
     return { total: s.length, wins, losses };
   }, [weekSettled]);
 
-  // Net profit (week): win = +profit, loss = -stake, push = 0
   const netProfitWeek = useMemo(() => {
     return weekSettled.reduce((sum, b) => {
       const stake = Number(b.stake || 0);
@@ -308,19 +342,16 @@ export default function HomeScreen() {
     }, 0);
   }, [weekSettled]);
 
-  // Monthly losses used toward cap (same logic you had)
   const monthlyLosses = useMemo(() => {
     return monthSettled.reduce((sum, b) => {
       const stake = Number(b.stake || 0);
       const profit = Number(b.profit || 0);
-
       if (b.result === "loss") return sum + stake;
-      if (b.result === "win") return sum - profit; // reduces losses used
+      if (b.result === "win") return sum - profit;
       return sum;
     }, 0);
   }, [monthSettled]);
 
-  // ✅ Days used uses placed_at (fallback created_at)
   const daysUsed = useMemo(() => {
     const set = new Set<string>();
     weekBets.forEach((b) => {
@@ -346,9 +377,8 @@ export default function HomeScreen() {
   const goLog = () => router.push("/(tabs)/log");
   const goEditGoals = () => router.push("/(tabs)/goals");
 
-  const BRAND_GREEN = "#22C55E";
+  const BRAND_GREEN = Theme.ok;
 
-  // ✅ Stronger Discipline Status (tilt risk score + drivers)
   const recentForDiscipline = useMemo(() => {
     return weekBets
       .slice(0, 10)
@@ -375,19 +405,10 @@ export default function HomeScreen() {
     });
   }, [weeklyBudget, monthlyCap, goals, weeklyWagered, monthlyLosses, netProfitWeek, recentForDiscipline]);
 
-  // --- tighter sizing (so buttons fit without scrolling) ---
+  const risk = useMemo(() => tiltRiskLevel(discipline.score), [discipline.score]);
+
   const GAP = 10;
   const CARD_PAD = 12;
-
-  const T_TITLE = 16; // section title (This Week/Month)
-  const T_BIG = 18; // Discipline label
-  const T_BODY = 13; // body copy
-  const T_SUB = 12; // small labels
-  const STAT_LABEL = 12;
-  const STAT_VALUE_BIG = 20;
-  const STAT_VALUE_MED = 16;
-
-  // Footer height: space reserved so ScrollView doesn't hide behind fixed buttons
   const FOOTER_H = 128;
 
   if (loading) {
@@ -400,9 +421,8 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg }}>
-      {/* Content */}
       <ScrollView contentContainerStyle={{ padding: 16, gap: GAP, paddingBottom: FOOTER_H + 24 }}>
-        {/* Branded Header (slightly tighter) */}
+        {/* Header */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <Image
             source={require("../../assets/appicon.png")}
@@ -417,7 +437,7 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Discipline Status (STRONGER) */}
+        {/* Discipline Status (clearer + coach-y) */}
         <View
           style={{
             backgroundColor: Theme.card,
@@ -425,9 +445,10 @@ export default function HomeScreen() {
             borderWidth: 1,
             borderColor: Theme.border,
             padding: CARD_PAD,
-            gap: 6,
+            gap: 8,
           }}
         >
+          {/* Top row */}
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View
@@ -439,34 +460,41 @@ export default function HomeScreen() {
                 }}
               />
               <Text style={{ color: Theme.sub, fontWeight: "900", letterSpacing: 0.6, fontSize: 12 }}>
-                DISCIPLINE STATUS
+                DISCIPLINE
               </Text>
             </View>
 
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
-              Tilt Risk {discipline.score}/100
-            </Text>
+            {/* Plain-language risk first */}
+            <View style={{ alignItems: "flex-end" }}>
+  <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+    Tilt Risk: <Text style={{ color: risk.color }}>{risk.level}</Text>
+  </Text>
+  <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 11, marginTop: 2, opacity: 0.85 }}>
+    {discipline.score}/100
+  </Text>
+</View>
           </View>
 
-          <Text style={{ color: Theme.text, fontSize: T_BIG, fontWeight: "900" }}>
+          {/* Status label */}
+          <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>
             {discipline.label}
           </Text>
 
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
-            {discipline.reasons[0] ?? "—"}
+          {/* What it means (this is the key “Watchlist clarity” fix) */}
+          <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 13 }}>
+            {statusCopy(discipline.score)}
           </Text>
 
-          {discipline.reasons[1] ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
-              {discipline.reasons[1]}
-            </Text>
-          ) : null}
+          
 
-          {discipline.reasons[2] ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
-              {discipline.reasons[2]}
-            </Text>
-          ) : null}
+          {/* Reasons */}
+          <View style={{ gap: 4, marginTop: 2 }}>
+            {(discipline.reasons ?? []).map((r, idx) => (
+              <Text key={idx} style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
+                • {r}
+              </Text>
+            ))}
+          </View>
         </View>
 
         {/* THIS WEEK */}
@@ -483,19 +511,18 @@ export default function HomeScreen() {
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View style={{ width: 8, height: 8, borderRadius: 99, backgroundColor: BRAND_GREEN }} />
-              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: T_TITLE }}>This Week</Text>
+              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>This Week</Text>
             </View>
 
             {weeklyOver ? (
-              <Text style={{ color: Theme.danger, fontWeight: "900", fontSize: T_SUB }}>
+              <Text style={{ color: Theme.danger, fontWeight: "900", fontSize: 12 }}>
                 Over {money(weeklyOverBy)}
               </Text>
             ) : null}
           </View>
 
-          {/* prevent wrap */}
-          <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
-            Weekly Wager Budget: {money(weeklyBudget)} • Used: {money(weeklyWagered)}
+          <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
+            Budget: {money(weeklyBudget)} • Used: {money(weeklyWagered)}
           </Text>
 
           <View
@@ -517,17 +544,17 @@ export default function HomeScreen() {
           </View>
 
           {!weeklyOver ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
+            <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
               Remaining: {money(Math.max(0, weeklyBudget - weeklyWagered))}
             </Text>
           ) : null}
 
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY, marginTop: 2 }}>
-            Betting Days Used: {daysUsed} / {goals?.days_per_week ?? 0}
+          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 13, marginTop: 2 }}>
+            Betting days: {daysUsed} / {goals?.days_per_week ?? 0}
           </Text>
 
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
-            Keep your guardrails tight to avoid tilt-chasing.
+          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
+            Tip: Smaller stakes after a loss streak.
           </Text>
         </View>
 
@@ -545,19 +572,18 @@ export default function HomeScreen() {
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <View style={{ width: 8, height: 8, borderRadius: 99, backgroundColor: BRAND_GREEN }} />
-              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: T_TITLE }}>This Month</Text>
+              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>This Month</Text>
             </View>
 
             {monthlyOver ? (
-              <Text style={{ color: Theme.danger, fontWeight: "900", fontSize: T_SUB }}>
+              <Text style={{ color: Theme.danger, fontWeight: "900", fontSize: 12 }}>
                 Over {money(monthlyOverBy)}
               </Text>
             ) : null}
           </View>
 
-          {/* prevent wrap */}
-          <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
-            Monthly Loss Cap: {money(monthlyCap)} • Losses: {money(monthlyLosses)}
+          <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
+            Loss cap: {money(monthlyCap)} • Used: {money(monthlyLosses)}
           </Text>
 
           <View
@@ -579,17 +605,17 @@ export default function HomeScreen() {
           </View>
 
           {!monthlyOver ? (
-            <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
+            <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
               Remaining: {money(Math.max(0, monthlyCap - monthlyLosses))}
             </Text>
           ) : null}
 
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: T_BODY }}>
-            Loss caps protect you from one bad stretch turning into a spiral.
+          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
+            Loss caps prevent spirals after a bad stretch.
           </Text>
         </View>
 
-        {/* Quick stats (3-up) */}
+        {/* Quick stats */}
         <View style={{ flexDirection: "row", gap: 10 }}>
           <View
             style={{
@@ -602,15 +628,14 @@ export default function HomeScreen() {
               gap: 4,
             }}
           >
-            <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "800", fontSize: STAT_LABEL }}>
-              Open Bets
+            <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
+              Open bets
             </Text>
-            <Text style={{ color: Theme.text, fontSize: STAT_VALUE_BIG, fontWeight: "900" }}>
+            <Text style={{ color: Theme.text, fontSize: 20, fontWeight: "900" }}>
               {openCount}
             </Text>
           </View>
 
-          {/* Net Profit (week) */}
           <View
             style={{
               flex: 1,
@@ -622,16 +647,13 @@ export default function HomeScreen() {
               gap: 2,
             }}
           >
-            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: STAT_LABEL }}>
-              Net Profit
-            </Text>
-            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: STAT_LABEL }}>
-              (week)
+            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
+              Net (week)
             </Text>
             <Text
               style={{
                 color: netProfitWeek >= 0 ? Theme.ok : Theme.danger,
-                fontSize: STAT_VALUE_MED,
+                fontSize: 16,
                 fontWeight: "900",
               }}
             >
@@ -639,7 +661,6 @@ export default function HomeScreen() {
             </Text>
           </View>
 
-          {/* Settled (week) */}
           <View
             style={{
               flex: 1,
@@ -651,20 +672,17 @@ export default function HomeScreen() {
               gap: 2,
             }}
           >
-            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: STAT_LABEL }}>
-              Settled
+            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
+              Settled (week)
             </Text>
-            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: STAT_LABEL }}>
-              (week)
-            </Text>
-            <Text style={{ color: Theme.text, fontSize: STAT_VALUE_MED, fontWeight: "900" }}>
+            <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
               {settledThisWeek.total} ({settledThisWeek.wins}W–{settledThisWeek.losses}L)
             </Text>
           </View>
         </View>
       </ScrollView>
 
-      {/* Fixed footer buttons (always visible) */}
+      {/* Fixed footer */}
       <View
         style={{
           position: "absolute",

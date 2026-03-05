@@ -1278,7 +1278,7 @@ export default function LogBetScreen() {
         {/* Bet summary (required memory anchor) */}
         <View style={{ gap: 8 }}>
           <SmallHeader
-            title="What was this bet? (required)"
+            title="Bet description (required)"
             subtitle="Write it how you’d remember it when it’s time to settle."
           />
 
@@ -1315,7 +1315,7 @@ export default function LogBetScreen() {
         <View style={{ gap: 10 }}>
           <SmallHeader
             title="Be honest — what’s driving this? (optional)"
-            subtitle="Pick at least one if you can — this powers your insights."
+            subtitle="Pick at least one if you can — this powers your insights and helps detect tilt patterns."
           />
 
           {emotions.length ? (
