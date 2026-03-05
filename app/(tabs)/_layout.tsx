@@ -88,7 +88,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="insights" options={{ title: "Insights" }} />
       <Tabs.Screen name="log" options={{ title: "Log" }} />
       <Tabs.Screen name="bets" options={{ title: "Bets" }} />
-      <Tabs.Screen name="goals" options={{ title: "Goals" }} />
+      <Tabs.Screen name="goals" options={{ title: "Limits" }} />
     </Tabs>
   );
 }

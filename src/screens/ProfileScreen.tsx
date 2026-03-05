@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -63,7 +64,7 @@ function CurrencyField({
         <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>$</Text>
 
         <TextInput
-          value={digitsAndDot(display.replace("$", ""))} // keep just numeric while showing $ prefix via the label
+          value={digitsAndDot(display.replace("$", ""))}
           onChangeText={(t) => onChangeRaw(digitsAndDot(t))}
           keyboardType="decimal-pad"
           returnKeyType="done"
@@ -276,6 +277,17 @@ export default function ProfileScreen() {
     }
   };
 
+  const sendFeedback = useCallback(() => {
+    const subject = encodeURIComponent("Tilt Check feedback (v1)");
+    const body = encodeURIComponent(
+      "What I liked:\n\nWhat confused me:\n\nBug / issue:\n\nFeature request:\n\n"
+    );
+    const url = `mailto:fordcroft54@gmail.com?subject=${subject}&body=${body}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert("Could not open email app", "Please email fordcroft54@gmail.com");
+    });
+  }, []);
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: Theme.bg }}
@@ -293,7 +305,8 @@ export default function ProfileScreen() {
           }}
         >
           <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between" }}>
-            <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>Goals</Text>
+            {/* ✅ Title changed */}
+            <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>Limits</Text>
 
             {!!statusText && (
               <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{statusText}</Text>
@@ -336,6 +349,28 @@ export default function ProfileScreen() {
             />
 
             {saveStatus === "error" && <Button title="Retry" onPress={doSave} disabled={retryDisabled} />}
+          </View>
+
+          {/* ✅ NEW: App Info */}
+          <View
+            style={{
+              backgroundColor: Theme.card,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: Theme.border,
+              padding: 14,
+              gap: 10,
+            }}
+          >
+            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>App Info</Text>
+
+            <Text style={{ color: Theme.sub, fontWeight: "800" }}>Tilt Check App V1</Text>
+
+            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+              Found a bug or have an idea? Send feedback anytime.
+            </Text>
+
+            <Button title="Send Feedback" variant="secondary" onPress={sendFeedback} />
           </View>
 
           <View style={{ height: 6 }} />

@@ -63,7 +63,7 @@ const BET_TYPES = [
 
 const EMOTION_GROUPS = {
   strategic: {
-    title: "🎯 Strategic",
+    title: "🎯 Planned",
     subtitle: "Intentional, thought-out bets",
     items: [
       { label: "🎉 Confident", value: "confident" },
@@ -73,7 +73,7 @@ const EMOTION_GROUPS = {
     ],
   },
   recreational: {
-    title: "🎉 Recreational",
+    title: "🎉 Fun",
     subtitle: "For fun or social vibes",
     items: [
       { label: "🙂 Just for fun", value: "fun" },
@@ -82,7 +82,7 @@ const EMOTION_GROUPS = {
     ],
   },
   situational: {
-    title: "⚠️ Situational",
+    title: "⚠️ Impulse",
     subtitle: "Not bad — just worth noticing",
     items: [
       { label: "😐 Bored", value: "bored" },
@@ -93,7 +93,7 @@ const EMOTION_GROUPS = {
     ],
   },
   reactive: {
-    title: "🔥 Reactive",
+    title: "🔥 Chasing",
     subtitle: "Emotion-driven patterns to watch",
     items: [
       { label: "😤 Chasing losses", value: "chasing_losses" },
@@ -1296,7 +1296,7 @@ export default function LogBetScreen() {
               ref={summaryRef}
               value={betSummary}
               onChangeText={setBetSummary}
-              placeholder='e.g., "Chiefs -3 vs Bills" or "Parlay: Lakers + Over"'
+              placeholder='e.g., "Chiefs -3 vs Bills"'
               placeholderTextColor={Theme.sub}
               returnKeyType="done"
               onSubmitEditing={() => Keyboard.dismiss()}
