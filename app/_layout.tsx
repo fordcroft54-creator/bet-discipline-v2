@@ -1,9 +1,13 @@
 // app/_layout.tsx
 import type { Session } from "@supabase/supabase-js";
 import { Stack, useRouter, useSegments } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
 import { supabase } from "../src/lib/supabase";
+
+SplashScreen.preventAutoHideAsync().catch(() => {
+  // ignore if already called
+});
 
 export default function RootLayout() {
   const router = useRouter();
@@ -12,7 +16,6 @@ export default function RootLayout() {
   const [session, setSession] = useState<Session | null>(null);
   const [booting, setBooting] = useState(true);
 
-  // Load initial session + subscribe to auth changes.
   useEffect(() => {
     let mounted = true;
 
@@ -51,45 +54,42 @@ export default function RootLayout() {
     };
   }, []);
 
-  // ✅ Redirect based on session + current route
   useEffect(() => {
     if (booting) return;
 
-    const first = segments[0]; // e.g. "auth", "(tabs)", "modal", "settle-bet"
+    const first = segments[0];
     const inAuth = first === "auth";
     const hasSession = !!session;
 
     console.log("ROUTE CHECK", { booting, hasSession, first });
 
-    // 1) Logged OUT users should go to /auth
     if (!hasSession && !inAuth) {
       router.replace("/auth");
       return;
     }
 
-    // 2) Logged IN users should not stay on /auth
     if (hasSession && inAuth) {
-      router.replace("/(tabs)/home"); // <-- change if your first tab route differs
+      router.replace("/(tabs)/home");
       return;
     }
-
-    // 3) Otherwise do nothing (allows standalone routes like /modal, /settle-bet)
   }, [session, booting, segments, router]);
 
+  useEffect(() => {
+    if (!booting) {
+      SplashScreen.hideAsync().catch(() => {
+        // ignore hide errors
+      });
+    }
+  }, [booting]);
+
   if (booting) {
-    return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator />
-      </View>
-    );
+    return null;
   }
 
   return (
     <Stack screenOptions={{ headerShown: false }}>
-      {/* Route files under app/ */}
       <Stack.Screen name="auth" />
       <Stack.Screen name="(tabs)" />
-      {/* standalone routes under app/, e.g. app/settle-bet.tsx, app/modal.tsx */}
       <Stack.Screen name="settle-bet" />
     </Stack>
   );

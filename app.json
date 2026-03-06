@@ -6,12 +6,12 @@
     "orientation": "portrait",
     "icon": "./assets/appicon.png",
     "scheme": "tiltcheck",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.fordcroft.tiltcheck",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -47,12 +47,10 @@
           }
         }
       ],
-      "expo-secure-store",
-      "@react-native-community/datetimepicker"
+      "expo-secure-store"
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+      "typedRoutes": true
     },
     "extra": {
       "router": {},

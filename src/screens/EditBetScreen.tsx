@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import type { DateTimePickerEvent } from "@react-native-community/datetimepicker"; 
 import { supabase } from "../lib/supabase";
 import { Theme } from "../ui/Theme";
 import { Button } from "../ui/Button";
@@ -56,7 +57,6 @@ type Bet = {
   settled_at?: string | null;
 };
 
-/** ✅ GLOBAL OPTIONS (edit once, used everywhere) */
 const SPORT_OPTIONS = [
   "NFL",
   "NBA",
@@ -84,25 +84,18 @@ const BET_TYPE_OPTIONS = [
 ] as const;
 
 const EMOTIONS: { label: string; value: string }[] = [
-  // Strategic
   { label: "🎉 Confident", value: "confident" },
   { label: "🧠 Research-based", value: "research" },
   { label: "📊 System play", value: "system" },
   { label: "🗓️ Pre-planned", value: "pre_planned" },
-
-  // Recreational
   { label: "🙂 Just for fun", value: "fun" },
   { label: "👯 Social / with friends", value: "social" },
   { label: "🔁 Habit / routine", value: "habit" },
-
-  // Situational
   { label: "😐 Bored", value: "bored" },
   { label: "😬 FOMO", value: "fomo" },
   { label: "⚡ Impulsive", value: "impulsive" },
   { label: "😰 Stressed", value: "stressed" },
   { label: "🍺 Drinking", value: "drinking" },
-
-  // Reactive
   { label: "😤 Chasing losses", value: "chasing_losses" },
   { label: "😡 Tilted / frustrated", value: "tilted" },
   { label: "💢 Revenge bet", value: "revenge" },
@@ -136,7 +129,11 @@ function clamp(n: number, lo: number, hi: number) {
 }
 
 function sameLocalDay(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
 function formatPrettyDate(d: Date) {
@@ -152,7 +149,6 @@ function formatPrettyDate(d: Date) {
   }
 }
 
-/** For backdated picks: set midday to avoid timezone edges */
 function normalizePickedDate(picked: Date) {
   const now = new Date();
   const d = new Date(picked);
@@ -164,11 +160,6 @@ function normalizePickedDate(picked: Date) {
   return d;
 }
 
-/**
- * Touch-safe SelectModal
- * - outer Pressable closes
- * - inner Pressable eats taps
- */
 function SelectModal<T extends string>({
   title,
   visible,
@@ -185,7 +176,13 @@ function SelectModal<T extends string>({
   onClose: () => void;
 }) {
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} presentationStyle="overFullScreen">
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      presentationStyle="overFullScreen"
+    >
       <Pressable
         onPress={onClose}
         style={{
@@ -206,8 +203,16 @@ function SelectModal<T extends string>({
             maxHeight: "75%",
           }}
         >
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>{title}</Text>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
+              {title}
+            </Text>
             <Pressable onPress={onClose} hitSlop={10}>
               <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
             </Pressable>
@@ -235,7 +240,14 @@ function SelectModal<T extends string>({
                       backgroundColor: isSel ? "#ffffff" : "transparent",
                     }}
                   >
-                    <Text style={{ color: isSel ? "#0f1115" : Theme.text, fontWeight: "900" }}>{opt}</Text>
+                    <Text
+                      style={{
+                        color: isSel ? "#0f1115" : Theme.text,
+                        fontWeight: "900",
+                      }}
+                    >
+                      {opt}
+                    </Text>
                   </Pressable>
                 );
               })}
@@ -284,14 +296,16 @@ export default function EditBetScreen() {
   const [resultUI, setResultUI] = useState<ResultUI>("Open");
   const [payoutText, setPayoutText] = useState<string>("");
 
-  // date + pickers
   const [placedAt, setPlacedAt] = useState<Date>(() => new Date());
   const [dateQuickOpen, setDateQuickOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [iosDraftDate, setIosDraftDate] = useState<Date>(() => new Date());
 
   const placedAtLabel = useMemo(() => {
-    const d = placedAt instanceof Date && !Number.isNaN(placedAt.getTime()) ? placedAt : new Date();
+    const d =
+      placedAt instanceof Date && !Number.isNaN(placedAt.getTime())
+        ? placedAt
+        : new Date();
     const now = new Date();
     if (sameLocalDay(d, now)) return `Today · ${formatPrettyDate(d)}`;
     const y = new Date(now);
@@ -302,7 +316,6 @@ export default function EditBetScreen() {
 
   const stakeNum = useMemo(() => toNumMoney(stakeText), [stakeText]);
 
-  // ✅ sport + bet type NOT required anymore
   const canSave = useMemo(() => {
     if (!betId) return false;
     if (!(stakeNum > 0)) return false;
@@ -373,14 +386,23 @@ export default function EditBetScreen() {
 
       const b = bet as Bet;
 
-      const rawEmotions: string[] = b.emotions?.length ? b.emotions : b.emotion ? [b.emotion] : [];
+      const rawEmotions: string[] = b.emotions?.length
+        ? b.emotions
+        : b.emotion
+          ? [b.emotion]
+          : [];
+
       const iso = b.placed_at ?? b.created_at ?? null;
       const dt = iso ? new Date(iso) : new Date();
       const safeDate = Number.isNaN(dt.getTime()) ? new Date() : dt;
 
       setSport(tidy(b.sport));
       setBetType(tidy(b.bet_type));
-      setStakeText(typeof b.stake === "number" && Number.isFinite(b.stake) ? String(b.stake) : "");
+      setStakeText(
+        typeof b.stake === "number" && Number.isFinite(b.stake)
+          ? String(b.stake)
+          : ""
+      );
       setEventLabel(tidy(b.event_label));
       setSelectedEmotions(rawEmotions.filter(Boolean).slice(0, 3));
       setConfidence(
@@ -390,10 +412,18 @@ export default function EditBetScreen() {
       );
       setPlacedAt(safeDate);
 
-      const ui = resultToUI((b.status as Status) ?? null, (b.result as Result) ?? null);
+      const ui = resultToUI(
+        (b.status as Status) ?? null,
+        (b.result as Result) ?? null
+      );
       setResultUI(ui);
 
-      if (ui === "Win" && typeof b.profit === "number" && Number.isFinite(b.profit) && b.profit > 0) {
+      if (
+        ui === "Win" &&
+        typeof b.profit === "number" &&
+        Number.isFinite(b.profit) &&
+        b.profit > 0
+      ) {
         setPayoutText(String(b.profit));
       } else {
         setPayoutText("");
@@ -414,7 +444,9 @@ export default function EditBetScreen() {
     if (!betId) return;
 
     const stake = toNumMoney(stakeText);
-    if (!Number.isFinite(stake) || stake <= 0) return Alert.alert("Missing", "Enter a valid stake.");
+    if (!Number.isFinite(stake) || stake <= 0) {
+      return Alert.alert("Missing", "Enter a valid stake.");
+    }
 
     const { status, result } = uiToDbResult(resultUI);
 
@@ -428,8 +460,10 @@ export default function EditBetScreen() {
       settledAtIso = new Date().toISOString();
       if (result === "win") {
         const payout = toNumMoney(payoutText);
-        if (!Number.isFinite(payout) || payout <= 0) return Alert.alert("Missing", "Enter a payout for a win.");
-        profit = payout; // saved to profit
+        if (!Number.isFinite(payout) || payout <= 0) {
+          return Alert.alert("Missing", "Enter a payout for a win.");
+        }
+        profit = payout;
       } else if (result === "loss") {
         profit = -Math.abs(stake);
       } else if (result === "push") {
@@ -438,7 +472,9 @@ export default function EditBetScreen() {
     }
 
     const placedAtIso =
-      placedAt instanceof Date && !Number.isNaN(placedAt.getTime()) ? placedAt.toISOString() : null;
+      placedAt instanceof Date && !Number.isNaN(placedAt.getTime())
+        ? placedAt.toISOString()
+        : null;
 
     setSaving(true);
     try {
@@ -450,7 +486,6 @@ export default function EditBetScreen() {
       if (userErr) throw userErr;
       if (!user) throw new Error("Not logged in.");
 
-      // ✅ store null when empty (cleaner than "")
       const sportClean = tidy(sport);
       const betTypeClean = tidy(betType);
 
@@ -463,14 +498,18 @@ export default function EditBetScreen() {
         emotion: selectedEmotions.length ? selectedEmotions[0] : null,
         confidence: confidence ?? null,
         placed_at: placedAtIso,
-
         status,
         result,
         profit,
         settled_at: settledAtIso,
       };
 
-      const { error } = await supabase.from("bets").update(payload).eq("id", betId).eq("user_id", user.id);
+      const { error } = await supabase
+        .from("bets")
+        .update(payload)
+        .eq("id", betId)
+        .eq("user_id", user.id);
+
       if (error) throw error;
 
       router.back();
@@ -495,16 +534,24 @@ export default function EditBetScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg, justifyContent: "center", alignItems: "center" }}>
+      <SafeAreaView
+        style={{
+          flex: 1,
+          backgroundColor: Theme.bg,
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
         <ActivityIndicator />
-        <Text style={{ color: Theme.sub, marginTop: 10, fontWeight: "800" }}>Loading bet…</Text>
+        <Text style={{ color: Theme.sub, marginTop: 10, fontWeight: "800" }}>
+          Loading bet…
+        </Text>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg }}>
-      {/* pickers */}
       <SelectModal
         title="Select sport"
         visible={sportOpen}
@@ -530,7 +577,6 @@ export default function EditBetScreen() {
         onClose={() => setResultOpen(false)}
       />
 
-      {/* Date quick picks */}
       <Modal
         visible={dateQuickOpen}
         transparent
@@ -540,7 +586,12 @@ export default function EditBetScreen() {
       >
         <Pressable
           onPress={() => setDateQuickOpen(false)}
-          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", padding: 16, justifyContent: "flex-end" }}
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.55)",
+            padding: 16,
+            justifyContent: "flex-end",
+          }}
         >
           <Pressable
             onPress={() => {}}
@@ -553,8 +604,16 @@ export default function EditBetScreen() {
               maxHeight: "70%",
             }}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>Edit bet date</Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
+                Edit bet date
+              </Text>
               <Pressable onPress={() => setDateQuickOpen(false)} hitSlop={10}>
                 <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
               </Pressable>
@@ -612,7 +671,6 @@ export default function EditBetScreen() {
         </Pressable>
       </Modal>
 
-      {/* iOS inline calendar */}
       <Modal
         visible={Platform.OS === "ios" && calendarOpen}
         transparent
@@ -622,7 +680,12 @@ export default function EditBetScreen() {
       >
         <Pressable
           onPress={() => setCalendarOpen(false)}
-          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.55)", padding: 16, justifyContent: "flex-end" }}
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.55)",
+            padding: 16,
+            justifyContent: "flex-end",
+          }}
         >
           <Pressable
             onPress={() => {}}
@@ -635,8 +698,16 @@ export default function EditBetScreen() {
               maxHeight: "75%",
             }}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>Pick a date</Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
+                Pick a date
+              </Text>
               <Pressable onPress={() => setCalendarOpen(false)} hitSlop={10}>
                 <Text style={{ color: Theme.sub, fontWeight: "800" }}>Close</Text>
               </Pressable>
@@ -656,7 +727,7 @@ export default function EditBetScreen() {
                 value={iosDraftDate}
                 mode="date"
                 display="inline"
-                onChange={(_event, selected) => {
+                onChange={(_event: DateTimePickerEvent, selected?: Date) => {
                   if (!selected) return;
                   setIosDraftDate(selected);
                 }}
@@ -682,13 +753,12 @@ export default function EditBetScreen() {
         </Pressable>
       </Modal>
 
-      {/* Android native */}
       {Platform.OS === "android" && calendarOpen && (
         <DateTimePicker
           value={placedAt}
           mode="date"
           display="default"
-          onChange={(_event, selected) => {
+          onChange={(_event: DateTimePickerEvent, selected?: Date) => {
             setCalendarOpen(false);
             if (!selected) return;
             setPlacedAt(normalizePickedDate(selected));
@@ -696,7 +766,6 @@ export default function EditBetScreen() {
         />
       )}
 
-      {/* Top bar */}
       <View
         style={{
           paddingHorizontal: 16,
@@ -722,7 +791,15 @@ export default function EditBetScreen() {
           <Text style={{ color: Theme.sub, fontWeight: "900" }}>Back</Text>
         </Pressable>
 
-        <Text style={{ color: Theme.text, fontSize: 22, fontWeight: "900", flex: 1, textAlign: "center" }}>
+        <Text
+          style={{
+            color: Theme.text,
+            fontSize: 22,
+            fontWeight: "900",
+            flex: 1,
+            textAlign: "center",
+          }}
+        >
           Edit Bet
         </Text>
 
@@ -739,7 +816,6 @@ export default function EditBetScreen() {
           contentContainerStyle={{ padding: 16, paddingBottom: 28, gap: 12 }}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Bet Date */}
           <Pressable
             onPress={() => setDateQuickOpen(true)}
             style={{
@@ -751,11 +827,14 @@ export default function EditBetScreen() {
               gap: 6,
             }}
           >
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Bet date</Text>
-            <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>{placedAtLabel}</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+              Bet date
+            </Text>
+            <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+              {placedAtLabel}
+            </Text>
           </Pressable>
 
-          {/* Sport + Bet Type (OPTIONAL) */}
           <View style={{ flexDirection: "row", gap: 10 }}>
             <Pressable
               onPress={() => setSportOpen(true)}
@@ -769,8 +848,12 @@ export default function EditBetScreen() {
                 gap: 6,
               }}
             >
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Sport (optional)</Text>
-              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>{sport ? sport : "Select"}</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+                Sport (optional)
+              </Text>
+              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+                {sport ? sport : "Select"}
+              </Text>
             </Pressable>
 
             <Pressable
@@ -785,14 +868,15 @@ export default function EditBetScreen() {
                 gap: 6,
               }}
             >
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Bet type (optional)</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+                Bet type (optional)
+              </Text>
               <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
                 {betType ? betType : "Select"}
               </Text>
             </Pressable>
           </View>
 
-          {/* Result */}
           <Pressable
             onPress={() => setResultOpen(true)}
             style={{
@@ -804,14 +888,19 @@ export default function EditBetScreen() {
               gap: 6,
             }}
           >
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Result</Text>
-            <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>{resultUI}</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+              Result
+            </Text>
+            <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>
+              {resultUI}
+            </Text>
           </Pressable>
 
-          {/* Payout */}
           {resultUI === "Win" && (
             <View style={{ gap: 6 }}>
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Payout (if win)</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+                Payout (if win)
+              </Text>
               <View
                 style={{
                   flexDirection: "row",
@@ -825,7 +914,9 @@ export default function EditBetScreen() {
                   paddingVertical: 10,
                 }}
               >
-                <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 18 }}>$</Text>
+                <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 18 }}>
+                  $
+                </Text>
                 <TextInput
                   value={payoutText}
                   onChangeText={(t) => setPayoutText(digitsAndDot(t))}
@@ -846,9 +937,10 @@ export default function EditBetScreen() {
             </View>
           )}
 
-          {/* Stake */}
           <View style={{ gap: 6 }}>
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Stake</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+              Stake
+            </Text>
             <View
               style={{
                 flexDirection: "row",
@@ -862,7 +954,9 @@ export default function EditBetScreen() {
                 paddingVertical: 10,
               }}
             >
-              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 18 }}>$</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 18 }}>
+                $
+              </Text>
               <TextInput
                 value={stakeText}
                 onChangeText={(t) => setStakeText(digitsAndDot(t))}
@@ -882,9 +976,10 @@ export default function EditBetScreen() {
             </View>
           </View>
 
-          {/* Game/Event */}
           <View style={{ gap: 6 }}>
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Game / Event</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+              Game / Event
+            </Text>
             <View
               style={{
                 flexDirection: "row",
@@ -916,14 +1011,24 @@ export default function EditBetScreen() {
             </View>
           </View>
 
-          {/* Confidence */}
           <View style={{ gap: 8 }}>
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Confidence</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+              Confidence
+            </Text>
             <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
               {[1, 2, 3, 4, 5].map((n) => {
                 const selected = confidence === n;
                 const label =
-                  n === 1 ? "Very low" : n === 2 ? "Low" : n === 3 ? "Medium" : n === 4 ? "High" : "Very high";
+                  n === 1
+                    ? "Very low"
+                    : n === 2
+                      ? "Low"
+                      : n === 3
+                        ? "Medium"
+                        : n === 4
+                          ? "High"
+                          : "Very high";
+
                 return (
                   <Pressable
                     key={n}
@@ -939,7 +1044,12 @@ export default function EditBetScreen() {
                       alignItems: "center",
                     }}
                   >
-                    <Text style={{ color: selected ? "#0f1115" : Theme.text, fontWeight: "900" }}>
+                    <Text
+                      style={{
+                        color: selected ? "#0f1115" : Theme.text,
+                        fontWeight: "900",
+                      }}
+                    >
                       {n}/5 {label}
                     </Text>
                   </Pressable>
@@ -948,9 +1058,10 @@ export default function EditBetScreen() {
             </View>
           </View>
 
-          {/* Emotions */}
           <View style={{ gap: 8 }}>
-            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>Emotions (up to 3)</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+              Emotions (up to 3)
+            </Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
               {EMOTIONS.map((e) => (
                 <Chip
@@ -962,11 +1073,20 @@ export default function EditBetScreen() {
               ))}
             </View>
             <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-              Selected <Text style={{ color: Theme.text, fontWeight: "900" }}>{selectedEmotions.length}</Text>/3
+              Selected{" "}
+              <Text style={{ color: Theme.text, fontWeight: "900" }}>
+                {selectedEmotions.length}
+              </Text>
+              /3
             </Text>
           </View>
 
-          <Button title={saving ? "Saving…" : "Save Changes"} onPress={onSave} disabled={!canSave || saving} />
+          <Button
+            title={saving ? "Saving…" : "Save Changes"}
+            onPress={onSave}
+            disabled={!canSave || saving}
+          />
+
           <Pressable onPress={() => router.back()} style={{ alignItems: "center", paddingVertical: 10 }}>
             <Text style={{ color: Theme.sub, fontWeight: "900" }}>Cancel</Text>
           </Pressable>
