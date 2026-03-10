@@ -1,3 +1,4 @@
+import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
@@ -25,19 +26,27 @@ function digitsAndDot(s: string) {
 
 function formatCurrencyForDisplay(raw: string) {
   const n = Number(digitsAndDot(raw));
-  if (!Number.isFinite(n)) return "$";
-  return `$${digitsAndDot(String(n))}`;
+  if (!Number.isFinite(n)) return "";
+  return digitsAndDot(String(n));
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
+const DEFAULT_LIMITS = {
+  maxBet: "50",
+  weeklyBudget: "200",
+  monthlyLossCap: "500",
+};
+
 function CurrencyField({
   label,
+  helper,
   valueRaw,
   onChangeRaw,
   placeholder = "0",
 }: {
   label: string;
+  helper: string;
   valueRaw: string;
   onChangeRaw: (raw: string) => void;
   placeholder?: string;
@@ -46,7 +55,8 @@ function CurrencyField({
 
   return (
     <View style={{ gap: 6 }}>
-      <Text style={{ color: Theme.sub, fontWeight: "800" }}>{label}</Text>
+      <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 15 }}>{label}</Text>
+      <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 13, lineHeight: 18 }}>{helper}</Text>
 
       <View
         style={{
@@ -55,7 +65,7 @@ function CurrencyField({
           borderColor: Theme.border,
           borderRadius: 14,
           paddingHorizontal: 12,
-          paddingVertical: 10,
+          paddingVertical: 12,
           flexDirection: "row",
           alignItems: "center",
           gap: 8,
@@ -64,7 +74,7 @@ function CurrencyField({
         <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>$</Text>
 
         <TextInput
-          value={digitsAndDot(display.replace("$", ""))}
+          value={display}
           onChangeText={(t) => onChangeRaw(digitsAndDot(t))}
           keyboardType="decimal-pad"
           returnKeyType="done"
@@ -87,67 +97,15 @@ function CurrencyField({
   );
 }
 
-function NumberField({
-  label,
-  valueRaw,
-  onChangeRaw,
-  placeholder = "0",
-}: {
-  label: string;
-  valueRaw: string;
-  onChangeRaw: (raw: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <View style={{ gap: 6 }}>
-      <Text style={{ color: Theme.sub, fontWeight: "800" }}>{label}</Text>
-
-      <View
-        style={{
-          backgroundColor: Theme.card,
-          borderWidth: 1,
-          borderColor: Theme.border,
-          borderRadius: 14,
-          paddingHorizontal: 12,
-          paddingVertical: 10,
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <TextInput
-          value={valueRaw}
-          onChangeText={(t) => onChangeRaw(digitsAndDot(t))}
-          keyboardType="number-pad"
-          returnKeyType="done"
-          blurOnSubmit
-          onSubmitEditing={() => Keyboard.dismiss()}
-          placeholder={placeholder}
-          placeholderTextColor={Theme.sub}
-          selectionColor={Theme.text}
-          style={{
-            flex: 1,
-            color: Theme.text,
-            fontSize: 16,
-            fontWeight: "800",
-            padding: 0,
-            margin: 0,
-          }}
-        />
-      </View>
-    </View>
-  );
-}
-
 export default function ProfileScreen() {
+  const router = useRouter();
   const bump = useAppStore((s) => s.bump);
 
   const [email, setEmail] = useState<string>("");
 
-  const [maxBet, setMaxBet] = useState("150");
-  const [weeklyBudget, setWeeklyBudget] = useState("500");
-  const [monthlyLossCap, setMonthlyLossCap] = useState("800");
-  const [daysPerWeek, setDaysPerWeek] = useState("3");
+  const [maxBet, setMaxBet] = useState(DEFAULT_LIMITS.maxBet);
+  const [weeklyBudget, setWeeklyBudget] = useState(DEFAULT_LIMITS.weeklyBudget);
+  const [monthlyLossCap, setMonthlyLossCap] = useState(DEFAULT_LIMITS.monthlyLossCap);
 
   const [busy, setBusy] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
@@ -156,6 +114,65 @@ export default function ProfileScreen() {
   const userIdRef = useRef<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const didHydrateRef = useRef(false);
+  const saveResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const buildPayload = useCallback(
+    (userId: string) => ({
+      user_id: userId,
+      max_bet: Number(digitsAndDot(maxBet)) || 0,
+      weekly_budget: Number(digitsAndDot(weeklyBudget)) || 0,
+      monthly_loss_cap: Number(digitsAndDot(monthlyLossCap)) || 0,
+    }),
+    [maxBet, weeklyBudget, monthlyLossCap]
+  );
+
+  const doSave = useCallback(async () => {
+    const userId = userIdRef.current;
+    if (!userId) {
+      setSaveStatus("error");
+      setSaveErrorMsg("Not logged in.");
+      return;
+    }
+
+    setSaveStatus("saving");
+    setSaveErrorMsg(null);
+
+    try {
+      const payload = buildPayload(userId);
+      const { error } = await supabase.from("goals").upsert(payload, { onConflict: "user_id" });
+      if (error) throw error;
+
+      bump();
+
+      if (!mountedRef.current) return;
+
+      setSaveStatus("saved");
+
+      if (saveResetRef.current) clearTimeout(saveResetRef.current);
+      saveResetRef.current = setTimeout(() => {
+        if (!mountedRef.current) return;
+        setSaveStatus("idle");
+      }, 1200);
+    } catch (e: any) {
+      if (!mountedRef.current) return;
+      setSaveStatus("error");
+      setSaveErrorMsg(e?.message ?? "Could not save limits");
+    }
+  }, [buildPayload, bump]);
+
+  const scheduleAutosave = useCallback(() => {
+    if (!userIdRef.current || !didHydrateRef.current) return;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    setSaveStatus("saving");
+    setSaveErrorMsg(null);
+
+    debounceRef.current = setTimeout(() => {
+      doSave();
+    }, 750);
+  }, [doSave]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -169,91 +186,58 @@ export default function ProfileScreen() {
         const user = data.user;
         setEmail(user?.email ?? "");
         userIdRef.current = user?.id ?? null;
-        if (!user) return;
+
+        if (!user) {
+          didHydrateRef.current = true;
+          return;
+        }
 
         const g = await supabase.from("goals").select("*").eq("user_id", user.id).maybeSingle();
-
         if (!mountedRef.current) return;
-
         if (g.error) throw g.error;
 
         if (g.data) {
-          setMaxBet(String(g.data.max_bet ?? 0));
-          setWeeklyBudget(String(g.data.weekly_budget ?? 0));
-          setMonthlyLossCap(String(g.data.monthly_loss_cap ?? 0));
-          setDaysPerWeek(String(g.data.days_per_week ?? 0));
+          setMaxBet(String(g.data.max_bet ?? DEFAULT_LIMITS.maxBet));
+          setWeeklyBudget(String(g.data.weekly_budget ?? DEFAULT_LIMITS.weeklyBudget));
+          setMonthlyLossCap(String(g.data.monthly_loss_cap ?? DEFAULT_LIMITS.monthlyLossCap));
+        } else {
+          setMaxBet(DEFAULT_LIMITS.maxBet);
+          setWeeklyBudget(DEFAULT_LIMITS.weeklyBudget);
+          setMonthlyLossCap(DEFAULT_LIMITS.monthlyLossCap);
+
+          const { error: seedError } = await supabase.from("goals").upsert(
+            {
+              user_id: user.id,
+              max_bet: Number(DEFAULT_LIMITS.maxBet),
+              weekly_budget: Number(DEFAULT_LIMITS.weeklyBudget),
+              monthly_loss_cap: Number(DEFAULT_LIMITS.monthlyLossCap),
+            },
+            { onConflict: "user_id" }
+          );
+
+          if (seedError) throw seedError;
+          bump();
         }
+
+        didHydrateRef.current = true;
       } catch (e: any) {
+        if (!mountedRef.current) return;
+        didHydrateRef.current = true;
         setSaveStatus("error");
-        setSaveErrorMsg(e?.message ?? "Could not load goals");
+        setSaveErrorMsg(e?.message ?? "Could not load limits");
       }
     })();
 
     return () => {
       mountedRef.current = false;
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (saveResetRef.current) clearTimeout(saveResetRef.current);
     };
-  }, []);
-
-  const buildPayload = (userId: string) => ({
-    user_id: userId,
-    max_bet: Number(digitsAndDot(maxBet)) || 0,
-    weekly_budget: Number(digitsAndDot(weeklyBudget)) || 0,
-    monthly_loss_cap: Number(digitsAndDot(monthlyLossCap)) || 0,
-    days_per_week: Number(digitsAndDot(daysPerWeek)) || 0,
-  });
-
-  const doSave = async () => {
-    const userId = userIdRef.current;
-    if (!userId) {
-      setSaveStatus("error");
-      setSaveErrorMsg("Not logged in.");
-      return;
-    }
-
-    setSaveStatus("saving");
-    setSaveErrorMsg(null);
-
-    try {
-      const payload = buildPayload(userId);
-
-      const { error } = await supabase.from("goals").upsert(payload, { onConflict: "user_id" });
-      if (error) throw error;
-
-      bump();
-
-      if (!mountedRef.current) return;
-      setSaveStatus("saved");
-
-      setTimeout(() => {
-        if (!mountedRef.current) return;
-        setSaveStatus("idle");
-      }, 1200);
-    } catch (e: any) {
-      if (!mountedRef.current) return;
-      setSaveStatus("error");
-      setSaveErrorMsg(e?.message ?? "Could not save goals");
-    }
-  };
-
-  const scheduleAutosave = () => {
-    if (!userIdRef.current) return;
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    setSaveStatus("saving");
-    setSaveErrorMsg(null);
-
-    debounceRef.current = setTimeout(() => {
-      doSave();
-    }, 750);
-  };
+  }, [bump]);
 
   useEffect(() => {
-    if (!userIdRef.current) return;
     scheduleAutosave();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [maxBet, weeklyBudget, monthlyLossCap, daysPerWeek]);
+  }, [maxBet, weeklyBudget, monthlyLossCap, scheduleAutosave]);
 
   const statusText = useMemo(() => {
     if (saveStatus === "saving") return "Saving…";
@@ -304,13 +288,19 @@ export default function ProfileScreen() {
             gap: 14,
           }}
         >
-          <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between" }}>
-            {/* ✅ Title changed */}
-            <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>Limits</Text>
+          <View style={{ gap: 6 }}>
+            <View style={{ flexDirection: "row", alignItems: "baseline", justifyContent: "space-between" }}>
+              <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>Limits</Text>
 
-            {!!statusText && (
-              <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{statusText}</Text>
-            )}
+              {!!statusText && (
+                <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>{statusText}</Text>
+              )}
+            </View>
+
+            <Text style={{ color: Theme.sub, fontWeight: "700", lineHeight: 20 }}>
+              Set the rules you want to bet within. Tilt Check uses these limits to track how disciplined your
+              betting is.
+            </Text>
           </View>
 
           <View
@@ -320,60 +310,49 @@ export default function ProfileScreen() {
               borderWidth: 1,
               borderColor: Theme.border,
               padding: 14,
-              gap: 12,
+              gap: 14,
             }}
           >
-            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>Limits</Text>
-
-            <CurrencyField label="Max Bet Size" valueRaw={maxBet} onChangeRaw={setMaxBet} placeholder="150" />
+            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>Your Betting Rules</Text>
 
             <CurrencyField
-              label="Weekly Wager Budget"
+              label="Max Bet"
+              helper="The most you want to risk on a single bet."
+              valueRaw={maxBet}
+              onChangeRaw={setMaxBet}
+              placeholder={DEFAULT_LIMITS.maxBet}
+            />
+
+            <CurrencyField
+              label="Weekly Budget"
+              helper="The total amount you’re comfortable wagering in one week."
               valueRaw={weeklyBudget}
               onChangeRaw={setWeeklyBudget}
-              placeholder="500"
+              placeholder={DEFAULT_LIMITS.weeklyBudget}
             />
 
             <CurrencyField
               label="Monthly Loss Cap"
+              helper="The most you’re willing to lose in a month before stepping back."
               valueRaw={monthlyLossCap}
               onChangeRaw={setMonthlyLossCap}
-              placeholder="800"
+              placeholder={DEFAULT_LIMITS.monthlyLossCap}
             />
 
-            <NumberField
-              label="Betting Days / Week"
-              valueRaw={daysPerWeek}
-              onChangeRaw={setDaysPerWeek}
-              placeholder="3"
-            />
+            <View
+              style={{
+                marginTop: 2,
+                paddingTop: 4,
+                gap: 10,
+              }}
+            >
+              <Text style={{ color: Theme.sub, fontWeight: "700" }}>You can update these anytime.</Text>
+
+              <Button title="Log A Bet" onPress={() => router.push("/log")} />
+            </View>
 
             {saveStatus === "error" && <Button title="Retry" onPress={doSave} disabled={retryDisabled} />}
           </View>
-
-          {/* ✅ NEW: App Info */}
-          <View
-            style={{
-              backgroundColor: Theme.card,
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: Theme.border,
-              padding: 14,
-              gap: 10,
-            }}
-          >
-            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>App Info</Text>
-
-            <Text style={{ color: Theme.sub, fontWeight: "800" }}>Tilt Check App V1</Text>
-
-            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
-              Found a bug or have an idea? Send feedback anytime.
-            </Text>
-
-            <Button title="Send Feedback" variant="secondary" onPress={sendFeedback} />
-          </View>
-
-          <View style={{ height: 6 }} />
 
           <View
             style={{
@@ -398,6 +377,27 @@ export default function ProfileScreen() {
               onPress={signOut}
               disabled={busy}
             />
+          </View>
+
+          <View
+            style={{
+              backgroundColor: Theme.card,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: Theme.border,
+              padding: 14,
+              gap: 10,
+            }}
+          >
+            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>App Info</Text>
+
+            <Text style={{ color: Theme.sub, fontWeight: "800" }}>Tilt Check App V1</Text>
+
+            <Text style={{ color: Theme.sub, fontWeight: "700" }}>
+              Found a bug or have an idea? Send feedback anytime.
+            </Text>
+
+            <Button title="Send Feedback" variant="secondary" onPress={sendFeedback} />
           </View>
         </ScrollView>
       </SafeAreaView>

@@ -1,7 +1,7 @@
 // src/screens/HomeScreen.tsx
 import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Image, SafeAreaView, ScrollView, Text, View } from "react-native";
+import { Alert, Image, Pressable, SafeAreaView, ScrollView, Text, View } from "react-native";
 import { iso, startOfMonth, startOfWeek } from "../lib/date";
 import { supabase } from "../lib/supabase";
 import { useAppStore } from "../store/useAppStore";
@@ -12,8 +12,7 @@ type Goals = {
   max_bet: number;
   weekly_budget: number;
   monthly_loss_cap: number;
-  days_per_week: number;
-  lock_days_on_cap: number;
+  lock_days_on_cap?: number | null;
 };
 
 type Bet = {
@@ -62,27 +61,22 @@ function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
 
-// Emotion risk weights (from your LogBetScreen emotion values)
 const EMOTION_RISK: Record<string, number> = {
-  // Planned (low)
   confident: 0,
   research: 0,
   system: 0,
   pre_planned: 0,
 
-  // Fun (low/moderate)
   fun: 1,
   social: 2,
   habit: 3,
 
-  // Impulse (moderate/high)
   bored: 6,
   fomo: 7,
   impulsive: 8,
   stressed: 9,
   drinking: 10,
 
-  // Chasing (high)
   chasing_losses: 15,
   tilted: 14,
   revenge: 13,
@@ -114,15 +108,49 @@ function prettyDriver(s: string) {
 }
 
 function tiltRiskLevel(score: number) {
-  // Plain-language labels instead of “39/100” dominating the UI
   if (score >= 75) return { level: "Severe", color: Theme.danger };
   if (score >= 50) return { level: "High", color: Theme.warn };
   if (score >= 25) return { level: "Moderate", color: Theme.warn };
   return { level: "Low", color: Theme.ok };
 }
 
+function disciplineScoreMeta(score: number) {
+  if (score >= 85) {
+    return {
+      label: "Excellent",
+      color: Theme.ok,
+      copy: "Your recent bets are closely aligned with your guardrails and strategy.",
+    };
+  }
+  if (score >= 70) {
+    return {
+      label: "Strong",
+      color: Theme.ok,
+      copy: "Most of your recent bets follow your system and limits.",
+    };
+  }
+  if (score >= 50) {
+    return {
+      label: "Fair",
+      color: Theme.warn,
+      copy: "Some recent bets are drifting outside your usual discipline.",
+    };
+  }
+  if (score >= 30) {
+    return {
+      label: "Shaky",
+      color: Theme.warn,
+      copy: "Your recent betting behavior shows signs of slipping discipline.",
+    };
+  }
+  return {
+    label: "At Risk",
+    color: Theme.danger,
+    copy: "Recent bets strongly suggest emotional or reactive betting.",
+  };
+}
+
 function statusCopy(score: number) {
-  // Make “Watchlist” self-explanatory
   if (score >= 75) return "You’re at high risk of tilt. Tighten guardrails now.";
   if (score >= 50) return "Warning zone — slow down and protect your budget.";
   if (score >= 25) return "Keep an eye on it — you’re trending toward tilt.";
@@ -136,7 +164,7 @@ function computeTiltRisk(args: {
   netProfitWeek: number;
   recentBets: Array<{
     stake: number;
-    confidence?: number | null; // 1..5
+    confidence?: number | null;
     emotions?: string[] | null;
     emotion?: string | null;
   }>;
@@ -147,25 +175,17 @@ function computeTiltRisk(args: {
   const monthlyCap = Number(goals.monthlyLossCap || 0);
   const maxBet = Number(goals.maxBet || 0);
 
-  // A) Weekly pressure (0–30)
   const weeklyPct = weeklyBudget > 0 ? clamp(weeklyWagered / weeklyBudget, 0, 2) : 0;
   const weeklyPts = weeklyBudget > 0 ? clamp(weeklyPct * 20, 0, 30) : 0;
 
-  // B) Monthly loss pressure (0–30)
   const monthlyPct = monthlyCap > 0 ? clamp(monthlyLosses / monthlyCap, 0, 2) : 0;
   const monthlyPts = monthlyCap > 0 ? clamp(monthlyPct * 22, 0, 30) : 0;
 
-  // C) Recent performance / chasing proxy (0–15)
   const perfScale = weeklyBudget > 0 ? weeklyBudget : Math.max(weeklyWagered, 100);
   const perfPts = netProfitWeek < 0 ? clamp((-netProfitWeek / perfScale) * 15, 0, 15) : 0;
 
-  // D) Emotion risk (0–15)
   const emotionSamples = recentBets.flatMap((b) => {
-    const arr = (b.emotions && b.emotions.length
-      ? b.emotions
-      : b.emotion
-        ? [b.emotion]
-        : []) as string[];
+    const arr = (b.emotions && b.emotions.length ? b.emotions : b.emotion ? [b.emotion] : []) as string[];
     return arr.slice(0, 3);
   });
 
@@ -176,14 +196,13 @@ function computeTiltRisk(args: {
 
   const emotionPts = clamp(emotionAvg, 0, 15);
 
-  // E) Confidence/stake mismatch (0–10): big stakes + low confidence
   const denom = maxBet > 0 ? maxBet : Math.max(...recentBets.map((b) => b.stake || 0), 100);
 
   const mismatchAvg =
     recentBets.length > 0
       ? recentBets.reduce((sum, b) => {
           const conf = clamp(Number(b.confidence ?? 3), 1, 5);
-          const confNorm = (conf - 1) / 4; // 0..1
+          const confNorm = (conf - 1) / 4;
           const stakePct = clamp((b.stake || 0) / denom, 0, 1.5);
           const mismatch = (1 - confNorm) * stakePct;
           return sum + mismatch;
@@ -203,9 +222,9 @@ function computeTiltRisk(args: {
 
   if (weeklyBudget > 0) {
     if (weeklyWagered > weeklyBudget) reasons.push(`Over weekly budget by ${money(weeklyWagered - weeklyBudget)}`);
-    else reasons.push(`${money(Math.max(0, weeklyBudget - weeklyWagered))} wager budget left this week`);
+    else reasons.push(`${money(Math.max(0, weeklyBudget - weeklyWagered))} left in weekly budget`);
   } else {
-    reasons.push("Set a weekly budget to activate guardrails");
+    reasons.push("Set guardrails to activate budget tracking");
   }
 
   if (monthlyCap > 0) {
@@ -220,20 +239,58 @@ function computeTiltRisk(args: {
 
   if (netProfitWeek < 0) reasons.push(`Down ${money(Math.abs(netProfitWeek))} this week`);
 
-  // Label = status label (keep your vibe, but clearer)
   const label =
-    score >= 75 ? "Lock It Down 🛑" :
-    score >= 50 ? "Tilt Risk ⚠️" :
-    score >= 25 ? "Watchlist 👀" :
-    "Disciplined ✅";
+    score >= 75
+      ? "Lock It Down 🛑"
+      : score >= 50
+      ? "Tilt Risk ⚠️"
+      : score >= 25
+      ? "Watchlist 👀"
+      : "Disciplined ✅";
 
   const dotColor =
-    score >= 75 ? Theme.danger :
-    score >= 50 ? Theme.warn :
-    score >= 25 ? Theme.warn :
-    Theme.ok;
+    score >= 75 ? Theme.danger : score >= 50 ? Theme.warn : score >= 25 ? Theme.warn : Theme.ok;
 
   return { score, label, dotColor, reasons: reasons.slice(0, 3) };
+}
+
+function StatCard({
+  title,
+  value,
+  valueColor,
+  subtitle,
+}: {
+  title: string;
+  value: string;
+  valueColor?: string;
+  subtitle?: string;
+}) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        minHeight: 96,
+        backgroundColor: Theme.card,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: Theme.border,
+        padding: 12,
+        gap: 6,
+      }}
+    >
+      <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
+        {title}
+      </Text>
+      <Text numberOfLines={1} style={{ color: valueColor ?? Theme.text, fontSize: 20, fontWeight: "900" }}>
+        {value}
+      </Text>
+      {subtitle ? (
+        <Text numberOfLines={2} style={{ color: Theme.sub, fontWeight: "700", fontSize: 12, lineHeight: 16 }}>
+          {subtitle}
+        </Text>
+      ) : null}
+    </View>
+  );
 }
 
 export default function HomeScreen() {
@@ -269,8 +326,8 @@ export default function HomeScreen() {
 
       if (b.error) throw b.error;
 
-      setGoals((g.data as any) ?? null);
-      setBets((b.data as any) ?? []);
+      setGoals((g.data as Goals | null) ?? null);
+      setBets((b.data as Bet[]) ?? []);
     } catch (e: any) {
       Alert.alert("Error", e?.message ?? "Could not load dashboard");
     } finally {
@@ -318,10 +375,7 @@ export default function HomeScreen() {
     });
   }, [bets, monthStart]);
 
-  const weeklyWagered = useMemo(
-    () => weekBets.reduce((sum, b) => sum + Number(b.stake || 0), 0),
-    [weekBets]
-  );
+  const weeklyWagered = useMemo(() => weekBets.reduce((sum, b) => sum + Number(b.stake || 0), 0), [weekBets]);
 
   const openCount = useMemo(() => bets.filter((b) => b.status === "open").length, [bets]);
 
@@ -352,18 +406,11 @@ export default function HomeScreen() {
     }, 0);
   }, [monthSettled]);
 
-  const daysUsed = useMemo(() => {
-    const set = new Set<string>();
-    weekBets.forEach((b) => {
-      const d = betAnchorDate(b);
-      if (!d) return;
-      set.add(d.toISOString().slice(0, 10));
-    });
-    return set.size;
-  }, [weekBets]);
-
   const weeklyBudget = Number(goals?.weekly_budget ?? 0);
   const monthlyCap = Number(goals?.monthly_loss_cap ?? 0);
+  const maxBet = Number(goals?.max_bet ?? 0);
+
+  const hasGuardrails = weeklyBudget > 0 || monthlyCap > 0 || maxBet > 0;
 
   const weeklyOver = weeklyBudget > 0 && weeklyWagered > weeklyBudget;
   const monthlyOver = monthlyCap > 0 && monthlyLosses > monthlyCap;
@@ -375,9 +422,8 @@ export default function HomeScreen() {
   const monthlyPct = monthlyCap > 0 ? Math.min(1, Math.max(0, monthlyLosses / monthlyCap)) : 0;
 
   const goLog = () => router.push("/(tabs)/log");
-  const goEditGoals = () => router.push("/(tabs)/goals");
-
-  const BRAND_GREEN = Theme.ok;
+  const goGuardrails = () => router.push("/(tabs)/goals");
+  const goBets = () => router.push("/(tabs)/bets");
 
   const recentForDiscipline = useMemo(() => {
     return weekBets
@@ -391,25 +437,27 @@ export default function HomeScreen() {
       .filter((x) => x.stake > 0);
   }, [weekBets]);
 
-  const discipline = useMemo(() => {
+  const tilt = useMemo(() => {
     return computeTiltRisk({
       goals: {
         weeklyBudget,
         monthlyLossCap: monthlyCap,
-        maxBet: Number(goals?.max_bet ?? 0),
+        maxBet,
       },
       weeklyWagered,
       monthlyLosses,
       netProfitWeek,
       recentBets: recentForDiscipline,
     });
-  }, [weeklyBudget, monthlyCap, goals, weeklyWagered, monthlyLosses, netProfitWeek, recentForDiscipline]);
+  }, [weeklyBudget, monthlyCap, maxBet, weeklyWagered, monthlyLosses, netProfitWeek, recentForDiscipline]);
 
-  const risk = useMemo(() => tiltRiskLevel(discipline.score), [discipline.score]);
+  const risk = useMemo(() => tiltRiskLevel(tilt.score), [tilt.score]);
+  const disciplineScore = useMemo(() => Math.max(0, 100 - tilt.score), [tilt.score]);
+  const disciplineMeta = useMemo(() => disciplineScoreMeta(disciplineScore), [disciplineScore]);
 
   const GAP = 10;
   const CARD_PAD = 12;
-  const FOOTER_H = 128;
+  const noBetsYet = bets.length === 0;
 
   if (loading) {
     return (
@@ -421,8 +469,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg }}>
-      <ScrollView contentContainerStyle={{ padding: 16, gap: GAP, paddingBottom: FOOTER_H + 24 }}>
-        {/* Header */}
+      <ScrollView contentContainerStyle={{ padding: 16, gap: GAP, paddingBottom: 32 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <Image
             source={require("../../assets/appicon.png")}
@@ -437,7 +484,45 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Discipline Status (clearer + coach-y) */}
+        {noBetsYet ? (
+          <View
+            style={{
+              backgroundColor: Theme.card,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: Theme.border,
+              padding: CARD_PAD,
+              gap: 10,
+            }}
+          >
+            <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>Getting Started</Text>
+            <Text style={{ color: Theme.sub, fontWeight: "700", lineHeight: 20 }}>
+              Start with two quick steps so Tilt Check can actually help you.
+            </Text>
+
+            <View style={{ gap: 6 }}>
+              <Text style={{ color: Theme.text, fontWeight: "800" }}>
+                1. {hasGuardrails ? "Review your guardrails" : "Add your guardrails"}
+              </Text>
+              <Text style={{ color: Theme.text, fontWeight: "800" }}>2. Log your first bet</Text>
+              <Text style={{ color: Theme.text, fontWeight: "800" }}>
+                3. Settle bets after games end to unlock insights
+              </Text>
+            </View>
+
+            <View style={{ gap: 10, marginTop: 4 }}>
+              {!hasGuardrails ? (
+                <Button title="Add Guardrails" onPress={goGuardrails} />
+              ) : (
+                <>
+                  <Button title="Review Guardrails" variant="secondary" onPress={goGuardrails} />
+                  <Button title="Log First Bet" onPress={goLog} />
+                </>
+              )}
+            </View>
+          </View>
+        ) : null}
+
         <View
           style={{
             backgroundColor: Theme.card,
@@ -445,51 +530,74 @@ export default function HomeScreen() {
             borderWidth: 1,
             borderColor: Theme.border,
             padding: CARD_PAD,
-            gap: 8,
+            gap: 10,
           }}
         >
-          {/* Top row */}
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
               <View
                 style={{
                   width: 9,
                   height: 9,
                   borderRadius: 99,
-                  backgroundColor: discipline.dotColor,
+                  backgroundColor: tilt.dotColor,
+                  marginTop: 3,
                 }}
               />
-              <Text style={{ color: Theme.sub, fontWeight: "900", letterSpacing: 0.6, fontSize: 12 }}>
-                DISCIPLINE
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: Theme.sub, fontWeight: "900", letterSpacing: 0.6, fontSize: 12 }}>
+                  DISCIPLINE STATUS
+                </Text>
+                <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900", marginTop: 2 }}>
+                  {tilt.label}
+                </Text>
+              </View>
+            </View>
+
+            <View style={{ alignItems: "flex-end" }}>
+              <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 24 }}>{disciplineScore}</Text>
+              <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 11 }}>Discipline Score</Text>
+            </View>
+          </View>
+
+          <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <View
+              style={{
+                paddingVertical: 7,
+                paddingHorizontal: 10,
+                borderRadius: 999,
+                backgroundColor: "rgba(255,255,255,0.05)",
+                borderWidth: 1,
+                borderColor: Theme.border,
+              }}
+            >
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+                Tilt Risk: <Text style={{ color: risk.color }}>{risk.level}</Text>
               </Text>
             </View>
 
-            {/* Plain-language risk first */}
-            <View style={{ alignItems: "flex-end" }}>
-  <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
-    Tilt Risk: <Text style={{ color: risk.color }}>{risk.level}</Text>
-  </Text>
-  <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 11, marginTop: 2, opacity: 0.85 }}>
-    {discipline.score}/100
-  </Text>
-</View>
+            <View
+              style={{
+                paddingVertical: 7,
+                paddingHorizontal: 10,
+                borderRadius: 999,
+                backgroundColor: "rgba(255,255,255,0.05)",
+                borderWidth: 1,
+                borderColor: Theme.border,
+              }}
+            >
+              <Text style={{ color: Theme.sub, fontWeight: "900", fontSize: 12 }}>
+                Discipline: <Text style={{ color: disciplineMeta.color }}>{disciplineMeta.label}</Text>
+              </Text>
+            </View>
           </View>
 
-          {/* Status label */}
-          <Text style={{ color: Theme.text, fontSize: 18, fontWeight: "900" }}>
-            {discipline.label}
-          </Text>
+          <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 13 }}>{disciplineMeta.copy}</Text>
 
-          {/* What it means (this is the key “Watchlist clarity” fix) */}
-          <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 13 }}>
-            {statusCopy(discipline.score)}
-          </Text>
+          <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 13 }}>{statusCopy(tilt.score)}</Text>
 
-          
-
-          {/* Reasons */}
-          <View style={{ gap: 4, marginTop: 2 }}>
-            {(discipline.reasons ?? []).map((r, idx) => (
+          <View style={{ gap: 4 }}>
+            {(tilt.reasons ?? []).map((r, idx) => (
               <Text key={idx} style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
                 • {r}
               </Text>
@@ -497,7 +605,44 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* THIS WEEK */}
+        <Pressable
+          onPress={goBets}
+          style={{
+            backgroundColor: openCount > 0 ? "rgba(245, 158, 11, 0.12)" : Theme.card,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: openCount > 0 ? Theme.warn : Theme.border,
+            padding: CARD_PAD,
+            gap: 6,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
+                {openCount === 0 ? "No Open Bets" : `${openCount} Open ${openCount === 1 ? "Bet" : "Bets"}`}
+              </Text>
+              <Text style={{ color: Theme.sub, fontWeight: "700", marginTop: 4 }}>
+                {openCount === 0
+                  ? "You’re fully up to date."
+                  : "Settle your open bets to keep your stats and insights accurate."}
+              </Text>
+            </View>
+
+            <View
+              style={{
+                paddingVertical: 8,
+                paddingHorizontal: 10,
+                borderRadius: 10,
+                backgroundColor: openCount > 0 ? Theme.warn : "#232a3a",
+              }}
+            >
+              <Text style={{ color: openCount > 0 ? "#0f1115" : Theme.text, fontWeight: "900" }}>
+                {openCount > 0 ? "Review" : "View Bets"}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+
         <View
           style={{
             backgroundColor: Theme.card,
@@ -508,14 +653,14 @@ export default function HomeScreen() {
             gap: 6,
           }}
         >
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <View style={{ width: 8, height: 8, borderRadius: 99, backgroundColor: BRAND_GREEN }} />
+              <View style={{ width: 8, height: 8, borderRadius: 99, backgroundColor: Theme.ok }} />
               <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>This Week</Text>
             </View>
 
             {weeklyOver ? (
-              <Text style={{ color: Theme.danger, fontWeight: "900", fontSize: 12 }}>
+              <Text style={{ color: Theme.danger, fontWeight: "900", fontSize: 12 }} numberOfLines={1}>
                 Over {money(weeklyOverBy)}
               </Text>
             ) : null}
@@ -549,16 +694,11 @@ export default function HomeScreen() {
             </Text>
           ) : null}
 
-          <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 13, marginTop: 2 }}>
-            Betting days: {daysUsed} / {goals?.days_per_week ?? 0}
-          </Text>
-
           <Text style={{ color: Theme.sub, fontWeight: "700", fontSize: 13 }}>
             Tip: Smaller stakes after a loss streak.
           </Text>
         </View>
 
-        {/* THIS MONTH */}
         <View
           style={{
             backgroundColor: Theme.card,
@@ -569,14 +709,14 @@ export default function HomeScreen() {
             gap: 6,
           }}
         >
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <View style={{ width: 8, height: 8, borderRadius: 99, backgroundColor: BRAND_GREEN }} />
+              <View style={{ width: 8, height: 8, borderRadius: 99, backgroundColor: Theme.ok }} />
               <Text style={{ color: Theme.text, fontWeight: "900", fontSize: 16 }}>This Month</Text>
             </View>
 
             {monthlyOver ? (
-              <Text style={{ color: Theme.danger, fontWeight: "900", fontSize: 12 }}>
+              <Text style={{ color: Theme.danger, fontWeight: "900", fontSize: 12 }} numberOfLines={1}>
                 Over {money(monthlyOverBy)}
               </Text>
             ) : null}
@@ -615,91 +755,35 @@ export default function HomeScreen() {
           </Text>
         </View>
 
-        {/* Quick stats */}
-        <View style={{ flexDirection: "row", gap: 10 }}>
-          <View
-            style={{
-              flex: 1,
-              backgroundColor: Theme.card,
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: Theme.border,
-              padding: CARD_PAD,
-              gap: 4,
-            }}
-          >
-            <Text numberOfLines={1} style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
-              Open bets
-            </Text>
-            <Text style={{ color: Theme.text, fontSize: 20, fontWeight: "900" }}>
-              {openCount}
-            </Text>
+        <View style={{ gap: 10 }}>
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <StatCard
+              title="Net This Week"
+              value={moneySigned(netProfitWeek)}
+              valueColor={netProfitWeek >= 0 ? Theme.ok : Theme.danger}
+              subtitle={netProfitWeek >= 0 ? "You’re in the green." : "Protect the downside."}
+            />
+            <StatCard
+              title="Settled This Week"
+              value={String(settledThisWeek.total)}
+              subtitle={`${settledThisWeek.wins}W • ${settledThisWeek.losses}L`}
+            />
           </View>
 
-          <View
-            style={{
-              flex: 1,
-              backgroundColor: Theme.card,
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: Theme.border,
-              padding: CARD_PAD,
-              gap: 2,
-            }}
-          >
-            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
-              Net (week)
-            </Text>
-            <Text
-              style={{
-                color: netProfitWeek >= 0 ? Theme.ok : Theme.danger,
-                fontSize: 16,
-                fontWeight: "900",
-              }}
-            >
-              {moneySigned(netProfitWeek)}
-            </Text>
-          </View>
-
-          <View
-            style={{
-              flex: 1,
-              backgroundColor: Theme.card,
-              borderRadius: 16,
-              borderWidth: 1,
-              borderColor: Theme.border,
-              padding: CARD_PAD,
-              gap: 2,
-            }}
-          >
-            <Text style={{ color: Theme.sub, fontWeight: "800", fontSize: 12 }}>
-              Settled (week)
-            </Text>
-            <Text style={{ color: Theme.text, fontSize: 16, fontWeight: "900" }}>
-              {settledThisWeek.total} ({settledThisWeek.wins}W–{settledThisWeek.losses}L)
-            </Text>
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <StatCard
+              title="Max Bet"
+              value={money(maxBet)}
+              subtitle={maxBet > 0 ? "Your single-bet cap." : "Set a cap in guardrails."}
+            />
+            <StatCard
+              title="Weekly Budget"
+              value={money(weeklyBudget)}
+              subtitle={weeklyBudget > 0 ? "Your weekly guardrail." : "Add budget guardrails."}
+            />
           </View>
         </View>
       </ScrollView>
-
-      {/* Fixed footer */}
-      <View
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          padding: 16,
-          paddingTop: 12,
-          backgroundColor: Theme.bg,
-          borderTopWidth: 1,
-          borderTopColor: Theme.border,
-          gap: 10,
-        }}
-      >
-        <Button title="+ Log Bet" onPress={goLog} />
-        <Button title="Edit Guardrails" variant="secondary" onPress={goEditGoals} />
-      </View>
     </SafeAreaView>
   );
 }

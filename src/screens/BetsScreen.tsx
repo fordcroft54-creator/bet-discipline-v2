@@ -1,7 +1,17 @@
 // src/screens/BetsScreen.tsx
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, Pressable, SafeAreaView, ScrollView, Text, View, Modal } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  Text,
+  View,
+  Modal,
+} from "react-native";
 import { supabase } from "../lib/supabase";
 import { Theme } from "../ui/Theme";
 
@@ -197,6 +207,80 @@ function FilterRow({ label, value, onPress }: { label: string; value: string; on
   );
 }
 
+function EmptyState({
+  filtersActive,
+  onClearFilters,
+  onLogBet,
+}: {
+  filtersActive: boolean;
+  onClearFilters: () => void;
+  onLogBet: () => void;
+}) {
+  return (
+    <View style={{ paddingHorizontal: 16, paddingTop: 18 }}>
+      <View
+        style={{
+          backgroundColor: Theme.card,
+          borderWidth: 1,
+          borderColor: Theme.border,
+          borderRadius: 16,
+          padding: 18,
+        }}
+      >
+        <Text style={{ color: Theme.text, fontSize: 20, fontWeight: "900" }}>
+          {filtersActive ? "No bets match these filters" : "No bets yet"}
+        </Text>
+
+        <Text style={{ color: Theme.sub, marginTop: 8, lineHeight: 21 }}>
+          {filtersActive
+            ? "Try clearing your filters to see all bets again."
+            : "Track your bets here to build your history, review results, and spot patterns in your betting behavior."}
+        </Text>
+
+        {!filtersActive ? (
+          <View style={{ marginTop: 14, gap: 8 }}>
+            <Text style={{ color: Theme.sub, fontWeight: "800" }}>To get started:</Text>
+
+            <View style={{ gap: 6 }}>
+              <Text style={{ color: Theme.text }}>1. Log your first bet</Text>
+              <Text style={{ color: Theme.text }}>2. Settle it once the result is in</Text>
+              <Text style={{ color: Theme.text }}>3. Come back here to track your history</Text>
+            </View>
+          </View>
+        ) : null}
+
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 18 }}>
+          {filtersActive ? (
+            <Pressable
+              onPress={onClearFilters}
+              style={{
+                backgroundColor: "#ffffff",
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                borderRadius: 12,
+              }}
+            >
+              <Text style={{ color: "#0f1115", fontWeight: "900" }}>Clear filters</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={onLogBet}
+              style={{
+                backgroundColor: "#ffffff",
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                borderRadius: 12,
+              }}
+            >
+              <Text style={{ color: "#0f1115", fontWeight: "900" }}>Log first bet</Text>
+            </Pressable>
+          )}
+        </View>
+      </View>
+    </View>
+  );
+}
+
 export default function BetsScreen() {
   const router = useRouter();
   const listRef = useRef<FlatList<Bet> | null>(null);
@@ -232,6 +316,13 @@ export default function BetsScreen() {
       } catch {}
     });
   }, []);
+
+  const clearFilters = useCallback(() => {
+    setFilterSport("All");
+    setFilterBetType("All");
+    setFilterResult("All");
+    scrollToTop(false);
+  }, [scrollToTop]);
 
   const loadBets = useCallback(async () => {
     setLoading(true);
@@ -384,16 +475,16 @@ export default function BetsScreen() {
     const isSettled = (item.status ?? "").toLowerCase() === "settled";
 
     const sportLabel = tidy(item.sport);
-const betTypeLabel = tidy(item.bet_type);
+    const betTypeLabel = tidy(item.bet_type);
 
-const header =
-  sportLabel && betTypeLabel
-    ? `${sportLabel} • ${betTypeLabel}`
-    : sportLabel
-    ? sportLabel
-    : betTypeLabel
-    ? betTypeLabel
-    : "Uncategorized";
+    const header =
+      sportLabel && betTypeLabel
+        ? `${sportLabel} • ${betTypeLabel}`
+        : sportLabel
+        ? sportLabel
+        : betTypeLabel
+        ? betTypeLabel
+        : "Uncategorized";
 
     const event = tidy(item.event_label);
     const stake = Number(item.stake ?? 0);
@@ -498,7 +589,7 @@ const header =
                 pathname: "/edit-bet",
                 params: { betId: item.id },
               } as any)
-}
+            }
             style={{
               backgroundColor: "#232a3a",
               paddingVertical: 10,
@@ -533,7 +624,6 @@ const header =
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Theme.bg }}>
-      {/* Filter dropdown modals */}
       <SelectModal
         title="Filter sport"
         visible={filterSportOpen}
@@ -542,6 +632,7 @@ const header =
         onSelect={(v) => setFilterSport(String(v))}
         onClose={() => setFilterSportOpen(false)}
       />
+
       <SelectModal
         title="Filter bet type"
         visible={filterBetTypeOpen}
@@ -558,7 +649,7 @@ const header =
         data={filteredBets}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        contentContainerStyle={{ paddingBottom: 24 }}
+        contentContainerStyle={{ paddingBottom: 24, flexGrow: 1 }}
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={
           <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10, gap: 10 }}>
@@ -566,12 +657,7 @@ const header =
               <Text style={{ color: Theme.text, fontSize: 26, fontWeight: "900" }}>Bets</Text>
               {filtersActive ? (
                 <Pressable
-                  onPress={() => {
-                    setFilterSport("All");
-                    setFilterBetType("All");
-                    setFilterResult("All");
-                    scrollToTop(false);
-                  }}
+                  onPress={clearFilters}
                   hitSlop={10}
                   style={{
                     paddingVertical: 8,
@@ -586,7 +672,6 @@ const header =
               ) : null}
             </View>
 
-            {/* Result pills */}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
               {RESULT_FILTERS.map((r) => {
                 const selected = filterResult === r;
@@ -612,7 +697,6 @@ const header =
               })}
             </ScrollView>
 
-            {/* Dropdown filter rows */}
             <View style={{ flexDirection: "row", gap: 10 }}>
               <FilterRow label="Sport" value={filterSport} onPress={() => setFilterSportOpen(true)} />
               <FilterRow label="Bet Type" value={filterBetType} onPress={() => setFilterBetTypeOpen(true)} />
@@ -628,9 +712,11 @@ const header =
           loading ? (
             <ActivityIndicator style={{ marginTop: 30 }} />
           ) : (
-            <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
-              <Text style={{ color: Theme.sub }}>{filtersActive ? "No bets match your filters." : "No bets yet."}</Text>
-            </View>
+            <EmptyState
+              filtersActive={filtersActive}
+              onClearFilters={clearFilters}
+              onLogBet={() => router.push("/log")}
+            />
           )
         }
       />
